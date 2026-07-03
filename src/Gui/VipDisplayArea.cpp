@@ -4577,7 +4577,15 @@ void VipMainWindow::mouseMoveEvent(QMouseEvent* evt)
 				this->move(global_pos - offset);
 				d_data->geom = geometry();
 			}
-			this->move(d_data->geom.topLeft() + diff);
+			if (QApplication::mouseButtons() & Qt::LeftButton) {
+				this->move(d_data->geom.topLeft() + diff);
+			}
+			else {
+				// Mouse release was missed!
+				// Simulate mouse release
+				d_data->pt = QPoint();
+				d_data->pressed_side = Vip::NoSide;
+			}
 			return;
 		}
 
