@@ -2358,6 +2358,11 @@ public:
 	QList<VipProcessingObject*> copy(VipProcessingPool* dst = nullptr);
 };
 
+
+Q_DECLARE_METATYPE(VipProcessingObjectList)
+
+
+
 /// @brief Returns the sources of input processing objects
 template<class T>
 QList<VipProcessingObject*> vipProcessingSources(const QList<T*>& procs)
