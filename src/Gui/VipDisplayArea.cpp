@@ -1166,6 +1166,7 @@ VipDisplayPlayerArea::VipDisplayPlayerArea(QWidget* parent)
 	// QAction * scale_params = d_data->colorMapBar->addAction(vipIcon("scaletools.png"), "Display color scale parameters");
 	d_data->scale = new VipColorScaleButton();
 	d_data->scale->setColorPalette(static_cast<VipLinearColorMap*>(d_data->colorMapAxis->colorMap())->type());
+	d_data->scale->setToolButtonStyle(Qt::ToolButtonIconOnly);
 	d_data->colorMapBar->addWidget(d_data->scale);
 
 	connect(d_data->auto_scale, SIGNAL(triggered(bool)), this, SLOT(setAutomaticColorScale(bool)));
@@ -4802,12 +4803,21 @@ void VipMainWindow::closeCurrentPlayer()
 void VipMainWindow::toggleWorkspaceFlatHistogram()
 {
 	if (auto* wkp = displayArea()->currentDisplayPlayerArea()) {
-		bool has_flat = wkp->colorMapAxis()->useFlatHistogram();
-		wkp->colorMapAxis()->setUseFlatHistogram(!has_flat);
-		QList<VipVideoPlayer*> players = wkp->findChildren<VipVideoPlayer*>();
-		for (qsizetype i = 0; i < players.size(); ++i) {
-			players[i]->setFlatHistogramColorScale(!has_flat);
-			players[i]->spectrogram()->update();
+		
+		if (!wkp->useGlobalColorMap()) {
+
+			QList<VipVideoPlayer*> players = wkp->findChildren<VipVideoPlayer*>();
+			bool has_flat = false;
+			if (players.size())
+				has_flat = players[0]->isFlatHistogramColorScale();
+			for (qsizetype i = 0; i < players.size(); ++i) {
+				players[i]->setFlatHistogramColorScale(!has_flat);
+				players[i]->spectrogram()->update();
+			}
+		}
+		else {
+			bool has_flat = wkp->colorMapAxis()->useFlatHistogram();
+			wkp->setFlatHistogramColorScale(!has_flat);
 		}
 	}
 }

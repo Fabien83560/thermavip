@@ -1860,8 +1860,11 @@ QList<VipAbstractPlayer*> vipCreatePlayersFromProcessing(VipProcessingObject* di
 
 	// try to read the device until we've got all outputs
 	VipIODevice* device = qobject_cast<VipIODevice*>(disp);
-	if (!device)
+	VipProcessingPool* pool = device ? device->parentObjectPool() : nullptr;
+	if (!device) {
 		device = disp->parentObjectPool();
+		pool = qobject_cast<VipProcessingPool*>(device);
+	}
 
 	// directly read the processing outputs
 	bool all_outputs = true;
@@ -1918,6 +1921,12 @@ QList<VipAbstractPlayer*> vipCreatePlayersFromProcessing(VipProcessingObject* di
 
 			if (!tmp.size()) // we cannot insert it: try to create a new player
 				tmp = vipCreatePlayersFromData(outputs[i], nullptr, proc_outputs[i], target, doutputs);
+		}
+
+		// Set the starting processing pool for the players
+		if (pool) {
+			for (auto* pl : tmp)
+				pl->setProcessingPool(pool);
 		}
 
 		players += tmp;

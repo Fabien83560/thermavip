@@ -734,7 +734,8 @@ static void updateVideoPlayer(VipVideoPlayer* player)
 	// Find parent workspace
 	if (auto* wkp = VipDisplayPlayerArea::fromChild(player)) {
 		// Set flat histogram if needed
-		player->setFlatHistogramColorScale(wkp->colorMapAxis()->useFlatHistogram());
+		if (wkp->useGlobalColorMap())
+			player->setFlatHistogramColorScale(wkp->colorMapAxis()->useFlatHistogram());
 	}
 	if (player && !player->property("NoImageProcessing").toBool() && player->spectrogram()->property("VipDisplayObject").value<VipDisplayObject*>())
 		new VipUpdateVideoPlayer(player);
