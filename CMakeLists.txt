@@ -121,6 +121,10 @@ install(FILES ${CMAKE_BINARY_DIR}/VipBuildConfig.h DESTINATION include)
 configure_file(${PROJECT_SOURCE_DIR}/src/VipConfig.h VipConfig.h)
 install(FILES ${PROJECT_SOURCE_DIR}/src/VipConfig.h DESTINATION include)
 
+# Third-party notices travel with the binaries: VipLogging embeds MIT-licensed
+# code whose attribution must be redistributed.
+install(FILES ${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/thermavip)
+
 INCLUDE_DIRECTORIES(${CMAKE_BINARY_DIR})
 
 

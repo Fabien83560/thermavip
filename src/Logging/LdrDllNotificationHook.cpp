@@ -1,3 +1,8 @@
+// Vendored from https://github.com/m417z/LdrDllNotificationHook
+// Copyright 2023 Michael Maltsev
+// SPDX-License-Identifier: MIT
+// Full text in THIRD_PARTY_NOTICES.md at the repository root.
+
 #include "LdrDllNotificationHook.h"
 
 #ifndef NT_SUCCESS
