@@ -384,7 +384,7 @@ VTK_DECLARE_ALGORITHM(Delaunay3D, VIP_CORE_EXPORT)
 	VTK_DECLARE_PROPERTY(OutputPointsPrecision);
 
 public:
-	VTK_CREATE_ALGORITHM(Delaunay3D) {}
+	VTK_CREATE_ALGORITHM(Delaunay3D, vtkPointSet) {}
 	virtual bool acceptInput(int /*index*/, const QVariant& v) const { return v.value<VipVTKObject>().pointSet(); }
 	virtual VipVTKObject transformInput(const VipVTKObject& obj, int) const
 	{
