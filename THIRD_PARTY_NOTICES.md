@@ -67,3 +67,40 @@ derivation without discharging any obligation.
 version derived from both need to be identified before the obligations can be
 stated here, and the derived files marked accordingly. This notice records the
 gap; it does not close it.
+
+## Binaries shipped in the repository
+
+Two directories hold third-party binaries that are committed and redistributed
+with the project. Neither carries a licence file today.
+
+### FFmpeg, prebuilt for MSVC
+
+| | |
+|---|---|
+| Location | `3rd_64/ffmpeg-7.1-msvc/lib/` |
+| Content | 16 committed binaries: avcodec, avdevice, avfilter, avformat, avutil, postproc, swresample, swscale |
+| Version | 7.1, per the directory name |
+| Licence | LGPL or GPL depending on how the build was configured, not recorded |
+
+FFmpeg is LGPL by default and becomes GPL as soon as GPL components are
+enabled. The build script in this repository, used on the platforms that
+compile FFmpeg from source, passes `--enable-gpl` and `--enable-libx264`, so
+what it produces is GPL. The configuration of the committed MSVC binaries is
+not recorded anywhere, so it cannot be stated here.
+
+### Xpdf command line tools
+
+| | |
+|---|---|
+| Location | `tools/win32/` |
+| Content | 10 executables: pdfdetach, pdffonts, pdfimages, pdfinfo, pdftohtml, pdftopbm, pdftopng, pdftoppm, pdftops, pdftotext |
+| Upstream | Xpdf, Glyph & Cog |
+| Copyright | Copyright 1996-2019 Glyph & Cog, LLC, read from the binaries themselves |
+| Licence | GPL, per the upstream project |
+
+**Open question, for the project owners.** Redistributing GPL executables
+alongside a BSD 3-Clause project is possible, but it has conditions, and they
+are met by nothing in the repository today: no licence text accompanies either
+set of binaries, and no build configuration is recorded for FFmpeg. Deciding
+how to satisfy them, or whether to stop shipping the binaries, is not something
+a code change settles. This notice makes the situation visible.
