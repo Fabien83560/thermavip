@@ -140,6 +140,10 @@ install(DIRECTORY help DESTINATION "${THERMAVIP_APPLICATION_DIR}")
 install(DIRECTORY icons DESTINATION "${THERMAVIP_APPLICATION_DIR}")
 install(DIRECTORY fonts DESTINATION "${THERMAVIP_APPLICATION_DIR}")
 
+# Must come before include(CTest), which records MEMORYCHECK_TYPE, and
+# before any target, since the flags are applied per target.
+include(${PROJECT_SOURCE_DIR}/cmake/thermavip_sanitizers.cmake)
+
 # enable_testing() is called explicitly so the `test` target exists
 # regardless of BUILD_TESTING. WITH_TESTS stays the project switch.
 # Must precede add_subdirectory(src): add_test() only counts afterwards.

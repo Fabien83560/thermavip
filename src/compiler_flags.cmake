@@ -281,10 +281,18 @@ endif()
 
 
 
+# Memory checking, placed in the additive hook and therefore outside the
+# local extension point, so a my_compiler_flags.cmake cannot silently drop
+# the instrumentation. No effect when THERMAVIP_SANITIZER is none.
+if(COMMAND thermavip_apply_sanitizer)
+	thermavip_apply_sanitizer(${TARGET_PROJECT})
+endif()
+
 # Local extension point: additive and anchored. The settings above always
 # apply. The file is looked up next to this fragment, not in the directory
 # cmake was started from, and its use is announced. Included last so a site
 # can adjust anything above, instrumentation included.
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/my_compiler_flags.cmake")
 	message(STATUS "Local compiler settings applied for ${TARGET_PROJECT}")
 	include("${CMAKE_CURRENT_LIST_DIR}/my_compiler_flags.cmake")
 endif()
