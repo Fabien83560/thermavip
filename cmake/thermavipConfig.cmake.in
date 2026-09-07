@@ -66,6 +66,9 @@ set(THERMAVIP_QT_LIBRARIES_NO_GUI Qt::Core
 	)
 endif()
 
+# Assigned unconditionally. It used to be set only inside the block below,
+# so a build without Qt WebEngine left this public variable undefined and
+# consumers linked no Qt module at all, failing at link time.
 if(NOT "@QT_WEBENGINE_LIBS@" STREQUAL "")
 	if(${QT_VERSION_MAJOR} LESS 6)
 		set(WEB_ENGINE WebEngine)
@@ -74,7 +77,6 @@ if(NOT "@QT_WEBENGINE_LIBS@" STREQUAL "")
 	endif()
 	find_package(Qt${QT_VERSION_MAJOR} COMPONENTS ${WEB_ENGINE})
 	find_package(Qt${QT_VERSION_MAJOR} COMPONENTS WebEngineWidgets )
-	set(THERMAVIP_QT_LIBRARIES ${THERMAVIP_QT_LIBRARIES_NO_GUI})
 	list(APPEND THERMAVIP_QT_LIBRARIES @QT_WEBENGINE_LIBS@)
 endif()
 
