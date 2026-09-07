@@ -194,8 +194,10 @@ else()
 		# For macro VIP_FOR_EACH_GENERIC, we need a compliant preprocessor
 		target_compile_options(${TARGET_PROJECT} PUBLIC /Zc:preprocessor)
 		
-		# Weird bug with msvc 2022...
-		target_compile_options(${TARGET_PROJECT} PUBLIC /wd"4828")
+		# C4828 is a real source encoding problem, to be fixed at the source.
+		# PRIVATE so consumers do not inherit it, and unquoted: cl.exe rejects
+		# /wd"4828" with error D8021.
+		target_compile_options(${TARGET_PROJECT} PRIVATE /wd4828)
 		
 		# For BIG source files
 		target_compile_options(${TARGET_PROJECT} PUBLIC /bigobj)
