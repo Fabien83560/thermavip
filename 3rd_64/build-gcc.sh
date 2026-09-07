@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Any subsequent(*) commands which fail will cause the shell script to exit immediately
+# Error handling is enabled below; this comment used to describe a
+# `set -e` that was commented out.
 #required packages: pkg-config autotools autoconf binutils nasm yasm
 # from IRFM
 
@@ -9,7 +10,15 @@ if [ -f /etc/bashrc ]; then
 	. /etc/bashrc
 fi
 
-#set -ex
+# Stop on error. Without it a failed configure step still ran make and
+# make install, and the script exited zero, so CMake believed the
+# third-party build had succeeded.
+#
+# set -u is deliberately absent: the ffmpeg configure line below passes
+# -Wl,-rpath='$ORIGIN' inside DOUBLE quotes, so bash expands ORIGIN, which
+# is never defined. Enabling -u would abort there. The empty rpath that
+# results is a separate defect, to be fixed before -u can be turned on.
+set -eo pipefail
 CFLAGS=""
 
 unameOut="$(uname -s)"
@@ -57,8 +66,12 @@ function configLine {
   local FILE=$1
   local NEW=$(echo "${NEW_LINE}" | sed 's/\//\\\//g')
   touch "${FILE}"
-  sed -i '/'"${OLD_LINE_PATTERN}"'/{s/.*/'"${NEW}"'/;h};${x;/./{x;q100};x}' "${FILE}"
-  if [[ $? -ne 100 ]] && [[ ${NEW_LINE} != '' ]]
+  # Status captured explicitly: sed returns 100 here on purpose, and under
+  # set -e the script would stop before the test below. A `|| true` would
+  # overwrite that 100 with 0 and invert the decision.
+  local status=0
+  sed -i '/'"${OLD_LINE_PATTERN}"'/{s/.*/'"${NEW}"'/;h};${x;/./{x;q100};x}' "${FILE}" || status=$?
+  if [[ ${status} -ne 100 ]] && [[ ${NEW_LINE} != '' ]]
   then
     echo "${NEW_LINE}" >> "${FILE}"
   fi
@@ -66,7 +79,8 @@ function configLine {
 NASM_VERSION="2.15.05"
 NASM_PACKAGE="nasm-$NASM_VERSION"
 #build nasm
-if ! nasm -v COMMAND &> /dev/null
+# `command -v` is the safe form; `nasm -v COMMAND` passed a stray argument.
+if ! command -v nasm > /dev/null 2>&1
 then
     if [ -d $NASM_PACKAGE ]; then
        echo "Dir $NASM_PACKAGE exists."
