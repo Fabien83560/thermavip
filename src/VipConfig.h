@@ -353,6 +353,9 @@ namespace detail
 /// @brief Recursive mutex introduced in Qt5.14.0
 class QRecursiveMutex : public QMutex
 {
+public:
+	// Without this, the constructor falls into the default private section of
+	// `class` and any QRecursiveMutex declaration fails to compile.
 	QRecursiveMutex()
 	  : QMutex(QMutex::Recursive)
 	{
