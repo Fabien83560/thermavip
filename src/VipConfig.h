@@ -72,10 +72,9 @@ namespace vip_log_detail {
 
 
 
-#ifdef _MSC_VER
-#pragma warning ( disable : 4127 ) //suppress useless "conditional expression is constant" warning
-#pragma warning ( disable : 4505 ) // suppress "unreferenced function with internal linkage has been removed"
-#endif
+// C4127 and C4505 used to be disabled here, in a public installed header
+// and without push/pop, which also silenced them in consumer code.
+// Moved to the build system, per target and PRIVATE.
 
 
 // Suppress deprecated warning with QString::SkipEmptyParts
@@ -353,6 +352,9 @@ namespace detail
 /// @brief Recursive mutex introduced in Qt5.14.0
 class QRecursiveMutex : public QMutex
 {
+public:
+	// Without this, the constructor falls into the default private section of
+	// `class` and any QRecursiveMutex declaration fails to compile.
 	QRecursiveMutex()
 	  : QMutex(QMutex::Recursive)
 	{
@@ -526,11 +528,9 @@ int vipStaticInitFunction(const char * file, int line, const char* msg, F&& fun,
 #define vipStaticInit(...) vipStaticInitFunction(__FILE__, __LINE__, __VA_ARGS__)
 
 
-#if defined(__clang__)
-// With clang, remove warning inconsistent-missing-override
-// until we add override specifier everywhere
-#pragma clang diagnostic ignored "-Winconsistent-missing-override"
-#endif
+// -Winconsistent-missing-override used to be disabled here, in a public
+// installed header and without push/pop, which also silenced it in
+// consumer code. Moved to the build system, per target and PRIVATE.
 
 
 #endif

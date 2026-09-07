@@ -7,11 +7,8 @@ Created on Tue Nov 28 09:03:19 2017
 
 
 import ThermavipPyProcessing as th
-import scipy
 import scipy.signal as sig
 import scipy.ndimage as nd
-import scipy.fftpack as fftp
-import scipy.misc as misc
 import numpy as np
 import sys 
 

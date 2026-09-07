@@ -45,7 +45,7 @@ class ThermavipBinaryClosing(th.ThermavipPyProcessing):
         pass
 
     def apply(self, data, time):
-        return nd.binary_closing(np.array(data,dtype=np.bool),structure(self.FullConnectivity,data),self.iterations)
+        return nd.binary_closing(np.array(data,dtype=bool),structure(self.FullConnectivity,data),self.iterations)
         
     def parameters(self):
         return {"Iterations":("int",self.iterations,0,20,1),\
@@ -74,7 +74,7 @@ class ThermavipBinaryOpening(th.ThermavipPyProcessing):
         pass
 
     def apply(self, data, time):
-        return nd.binary_opening(np.array(data,dtype=np.bool),structure(self.FullConnectivity,data),self.iterations)
+        return nd.binary_opening(np.array(data,dtype=bool),structure(self.FullConnectivity,data),self.iterations)
         
     def parameters(self):
         return {"Iterations":("int",self.iterations,0,20,1),\
@@ -100,7 +100,7 @@ class ThermavipBinaryDilation(th.ThermavipPyProcessing):
         pass
 
     def apply(self, data, time):
-        return nd.binary_dilation(np.array(data,dtype=np.bool),structure(self.FullConnectivity,data),self.iterations)
+        return nd.binary_dilation(np.array(data,dtype=bool),structure(self.FullConnectivity,data),self.iterations)
         
     def parameters(self):
         return {"Iterations":("int",self.iterations,0,20,1),\
@@ -126,7 +126,7 @@ class ThermavipBinaryErosion(th.ThermavipPyProcessing):
         pass
 
     def apply(self, data, time):
-        return nd.binary_erosion(np.array(data,dtype=np.bool),structure(self.FullConnectivity,data),self.iterations)
+        return nd.binary_erosion(np.array(data,dtype=bool),structure(self.FullConnectivity,data),self.iterations)
         
     def parameters(self):
         return {"Iterations":("int",self.iterations,0,20,1),\
@@ -149,7 +149,7 @@ class ThermavipBinaryFillHoles(th.ThermavipPyProcessing):
         pass
 
     def apply(self, data, time):
-        return nd.binary_fill_holes(np.array(data,dtype=np.bool),structure(self.FullConnectivity,data),self.iterations)
+        return nd.binary_fill_holes(np.array(data, dtype=bool), structure(self.FullConnectivity, data))
         
     def parameters(self):
         return {"FullConnectivity":("bool",self.FullConnectivity)}
