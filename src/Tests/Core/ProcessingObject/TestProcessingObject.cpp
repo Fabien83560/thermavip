@@ -377,6 +377,28 @@ private Q_SLOTS:
 		QVERIFY2(clone == nullptr, "an unregistered type cannot be rebuilt by the factory");
 	}
 
+	/// The three offset processings are rebuildable by name. Regression guard:
+	/// two of them were missing from the type registry, so copy() returned
+	/// nullptr on them.
+	void offsetProcessingsAreRegistered()
+	{
+		{
+			VipStartAtZero p;
+			const std::unique_ptr<VipProcessingObject> c(p.copy());
+			QVERIFY2(c != nullptr, "VipStartAtZero must be rebuildable by name");
+		}
+		{
+			VipStartYAtZero p;
+			const std::unique_ptr<VipProcessingObject> c(p.copy());
+			QVERIFY2(c != nullptr, "VipStartYAtZero must be rebuildable by name");
+		}
+		{
+			VipXOffset p;
+			const std::unique_ptr<VipProcessingObject> c(p.copy());
+			QVERIFY2(c != nullptr, "VipXOffset must be rebuildable by name");
+		}
+	}
+
 	// -- VipProcessingList ---------------------------------------------------
 
 	/// An empty list short circuits and forwards its input to its output.
