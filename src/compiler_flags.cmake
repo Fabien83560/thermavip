@@ -220,6 +220,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
 	
 	# For BIG source files
 	target_compile_options(${TARGET_PROJECT} PUBLIC /bigobj)
+
+	# Moved out of the public installed header, where these also silenced the
+	# diagnostics in consumer code. Kept as debt: C4505 flags dead static
+	# functions and should be fixed rather than hidden.
+	target_compile_options(${TARGET_PROJECT} PRIVATE /wd4127 /wd4505)
 	
 	#string(REPLACE "/utf-8" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
 	#string(REPLACE "-utf-8" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")

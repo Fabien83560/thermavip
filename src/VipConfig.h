@@ -72,10 +72,9 @@ namespace vip_log_detail {
 
 
 
-#ifdef _MSC_VER
-#pragma warning ( disable : 4127 ) //suppress useless "conditional expression is constant" warning
-#pragma warning ( disable : 4505 ) // suppress "unreferenced function with internal linkage has been removed"
-#endif
+// C4127 and C4505 used to be disabled here, in a public installed header
+// and without push/pop, which also silenced them in consumer code.
+// Moved to the build system, per target and PRIVATE.
 
 
 // Suppress deprecated warning with QString::SkipEmptyParts
