@@ -149,7 +149,7 @@ class ThermavipBinaryFillHoles(th.ThermavipPyProcessing):
         pass
 
     def apply(self, data, time):
-        return nd.binary_fill_holes(np.array(data,dtype=bool),structure(self.FullConnectivity,data),self.iterations)
+        return nd.binary_fill_holes(np.array(data, dtype=bool), structure(self.FullConnectivity, data))
         
     def parameters(self):
         return {"FullConnectivity":("bool",self.FullConnectivity)}
