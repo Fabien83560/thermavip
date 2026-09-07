@@ -192,37 +192,37 @@ endif()
 
 # Add targets
 target_include_directories(VipLogging  PUBLIC
-						   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/VipLogging>"
+						   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/Logging>"
 						   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/VipLogging>"
 						   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")	   
 install(TARGETS VipLogging EXPORT thermavip DESTINATION "${CMAKE_INSTALL_LIBDIR}" LIBRARY)
 
 target_include_directories(VipDataType  PUBLIC
-						   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/VipDataType>"
+						   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/DataType>"
 						   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/VipDataType>"
 						   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")	   
 install(TARGETS VipDataType EXPORT thermavip DESTINATION "${CMAKE_INSTALL_LIBDIR}" LIBRARY)
 
 target_include_directories(VipCore  PUBLIC
-						   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/VipCore>"
+						   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/Core>"
 						   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/VipCore>"
 						   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")	   
 install(TARGETS VipCore EXPORT thermavip DESTINATION "${CMAKE_INSTALL_LIBDIR}" LIBRARY)
 
 target_include_directories(VipPlotting  PUBLIC
-						   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/VipPlotting>"
+						   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/Plotting>"
 						   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/VipPlotting>"
 						   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")	   
 install(TARGETS VipPlotting EXPORT thermavip DESTINATION "${CMAKE_INSTALL_LIBDIR}" LIBRARY)
 
 target_include_directories(VipGui  PUBLIC
-						   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/VipGui>"
+						   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/Gui>"
 						   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/VipGui>"
 						   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")	   
 install(TARGETS VipGui EXPORT thermavip DESTINATION "${CMAKE_INSTALL_LIBDIR}" LIBRARY)
 
 target_include_directories(VipAnnotation  PUBLIC
-						   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/VipAnnotation>"
+						   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/Annotation>"
 						   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/VipAnnotation>"
 						   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")	   
 install(TARGETS VipAnnotation EXPORT thermavip DESTINATION "${CMAKE_INSTALL_LIBDIR}" LIBRARY)
