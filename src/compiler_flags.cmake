@@ -1,5 +1,25 @@
 
 
+# Instruction set for GCC, driven by THERMAVIP_NATIVE_ARCH (declared at the
+# root). The default keeps binaries redistributable and builds reproducible.
+if(NOT COMMAND thermavip_add_arch_flags)
+	include(CheckCXXCompilerFlag)
+	function(thermavip_add_arch_flags _target)
+		if(THERMAVIP_NATIVE_ARCH)
+			# Not redistributable: dies with SIGILL on any older CPU. The -mno-*
+			# flags are kept only here; they matter solely with -march=native.
+			target_compile_options(${_target} PRIVATE -march=native -mno-bmi2 -mno-fma -mno-avx)
+		else()
+			# Portable baseline. x86-64-v2 needs GCC 11 and the CI uses gcc-10,
+			# hence the probe rather than a blind flag.
+			check_cxx_compiler_flag("-march=x86-64-v2" THERMAVIP_HAS_MARCH_X86_64_V2)
+			if(THERMAVIP_HAS_MARCH_X86_64_V2)
+				target_compile_options(${_target} PRIVATE -march=x86-64-v2)
+			endif()
+		endif()
+	endfunction()
+endif()
+
 find_package(QT NAMES Qt5 Qt6 REQUIRED )
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets OpenGL Core Gui Xml Network Sql PrintSupport Svg Concurrent)
 message(STATUS "Qt found for ${TARGET_PROJECT}, version ${QT_VERSION_MAJOR}.${QT_VERSION_MINOR}")
@@ -154,7 +174,10 @@ endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
 	# for gcc
-	target_compile_options(${TARGET_PROJECT} PRIVATE -march=native -fopenmp -fPIC -mno-bmi2 -mno-fma -mno-avx -Wno-maybe-uninitialized)
+	# -Wno-maybe-uninitialized kept for now: the Linux CI builds with -Werror
+	# and the hidden sites cannot be counted from a Windows host.
+	target_compile_options(${TARGET_PROJECT} PRIVATE -fopenmp -fPIC -Wno-maybe-uninitialized)
+	thermavip_add_arch_flags(${TARGET_PROJECT})
 	if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 6.0)
 		target_compile_options(${TARGET_PROJECT} PRIVATE -std=gnu++17)
 	else()
@@ -165,7 +188,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
 	
 	if (CMAKE_BUILD_TYPE STREQUAL "Release" )
 		# gcc release
-		target_compile_options(${TARGET_PROJECT} PRIVATE -O3 -ftree-vectorize -march=native -fopenmp -fPIC -mno-bmi2 -mno-fma -mno-avx -Wno-maybe-uninitialized)
+		target_compile_options(${TARGET_PROJECT} PRIVATE -O3 -ftree-vectorize)
 		if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 6.0)
 			target_compile_options(${TARGET_PROJECT} PRIVATE -std=gnu++17)
 		else()

@@ -37,6 +37,7 @@ option(WITH_EXAMPLES "Build examples" ON)
 option(WITH_TESTS "Build tests" ON)
 option(WITH_MICRO "Experimental, use micro generic allocator to reduce memory footprint" OFF)
 option(NO_WARNING "Treat warnings as errors" OFF)
+option(THERMAVIP_NATIVE_ARCH "Optimise for the build machine CPU (GCC; binary is not redistributable)" OFF)
 
 
 # Local installation
