@@ -198,6 +198,10 @@ if(WITH_VTK)
 	set(HAS_VTK ON)
 else()
 	set(HAS_VTK OFF)
+	# Say it out loud: with VTK off, four modules silently drop every VTK and
+	# FieldOfView source, and no configuration compiles them. That code only
+	# breaks for whoever turns the option on.
+	message(STATUS "VTK support disabled: VTK and FieldOfView sources are excluded from VipDataType, VipCore, VipPlotting and VipGui")
 endif()
 
 

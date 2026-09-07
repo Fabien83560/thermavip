@@ -76,3 +76,30 @@ jobs:
 
         
 
+    # VTK support is compiled by no configuration today, so it degrades silently
+    # and only breaks for whoever turns the option on. Non-blocking on purpose:
+    # this code has never been built, so the first runs report accumulated
+    # breakage, and a job red from day one gets disabled before it helps.
+    build-linux-vtk:
+        runs-on: ubuntu-22.04
+        continue-on-error: true
+
+        steps:
+        - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+        - name: Install Qt
+          uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1 -- note: "v4" is a BRANCH here, not a tag
+          with:
+            modules: 'qt5compat'
+
+        - name: install gcc 10 and VTK
+          run: sudo apt-get update && sudo apt-get install -y gcc-10 g++-10 libvtk9-dev
+
+        - name: Build with VTK
+          run: |
+              cmake -S . -B build-vtk -DCMAKE_BUILD_TYPE=Debug -DWITH_VTK=ON -DWITH_EXAMPLES=OFF -DLOCAL_INSTALL=ON
+              cmake --build build-vtk --parallel
+          shell: bash
+          env:
+           CC:   gcc-10
+           CXX:  g++-10
