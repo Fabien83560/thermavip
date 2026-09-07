@@ -528,11 +528,9 @@ int vipStaticInitFunction(const char * file, int line, const char* msg, F&& fun,
 #define vipStaticInit(...) vipStaticInitFunction(__FILE__, __LINE__, __VA_ARGS__)
 
 
-#if defined(__clang__)
-// With clang, remove warning inconsistent-missing-override
-// until we add override specifier everywhere
-#pragma clang diagnostic ignored "-Winconsistent-missing-override"
-#endif
+// -Winconsistent-missing-override used to be disabled here, in a public
+// installed header and without push/pop, which also silenced it in
+// consumer code. Moved to the build system, per target and PRIVATE.
 
 
 #endif

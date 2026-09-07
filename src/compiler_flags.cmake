@@ -172,6 +172,14 @@ if (WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
 	target_link_options(${TARGET_PROJECT} PRIVATE -lKernel32 -lpsapi -lBcrypt)
 endif()
 
+# Moved out of the public installed header, where it also silenced the
+# diagnostic in consumer code. Kept as debt: it hides virtual functions
+# redefined without `override`. Counting the sites needs a clang build
+# without the flag, then clang-tidy modernize-use-override, then removal.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+	target_compile_options(${TARGET_PROJECT} PRIVATE -Wno-inconsistent-missing-override)
+endif()
+
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
 	# for gcc
 	# -Wno-maybe-uninitialized kept for now: the Linux CI builds with -Werror
