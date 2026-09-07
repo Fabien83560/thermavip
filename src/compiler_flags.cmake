@@ -229,11 +229,19 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
 	#target_compile_options(${TARGET_PROJECT} PUBLIC /execution-charset:utf-8 /source-charset:utf-8)
 	
 	target_link_libraries(${TARGET_PROJECT} PRIVATE opengl32)
-else()
-	# Find shared libraries next to the executable
+elseif(APPLE)
+	# Shared libraries next to the executable. INSTALL_RPATH, not LINK_FLAGS:
+	# the latter replaces any link option already set on the target. CMake also
+	# escapes the token and translates it per platform; $ORIGIN does not exist
+	# on macOS, @loader_path does.
 	set_target_properties(${TARGET_PROJECT} PROPERTIES
 		BUILD_WITH_INSTALL_RPATH FALSE
-		LINK_FLAGS "-Wl,-rpath,$ORIGIN/")
+		INSTALL_RPATH "@loader_path")
+else()
+	# Same for ELF targets (Linux, MinGW), with CMake escaping $ORIGIN.
+	set_target_properties(${TARGET_PROJECT} PROPERTIES
+		BUILD_WITH_INSTALL_RPATH FALSE
+		INSTALL_RPATH "$ORIGIN")
 endif()
 
 # add openmp for all
