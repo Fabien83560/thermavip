@@ -43,3 +43,27 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
+
+## qwt
+
+| | |
+|---|---|
+| Upstream | https://qwt.sourceforge.io/ |
+| Licence | to be established, see below |
+| Files | `src/Plotting/**` |
+| Revision taken | not recorded |
+
+The README states that the Plotting library is "a heavily modified version of
+qwt". Nothing else in the tree records that: every file under `src/Plotting`
+opens with the project BSD 3-Clause header naming CEA/IRFM only, and no qwt
+licence text exists anywhere in the repository.
+
+Eight files still carry qwt identifiers in comments and documentation blocks
+(`QwtClipper`, `QwtCurveFitter`, `QwtRasterData`, `QWT_HIGH_DPI`, ...). Those
+are leftovers of the original code, not attribution: they confirm the
+derivation without discharging any obligation.
+
+**Open question, for the project owners.** The upstream licence and the qwt
+version derived from both need to be identified before the obligations can be
+stated here, and the derived files marked accordingly. This notice records the
+gap; it does not close it.
