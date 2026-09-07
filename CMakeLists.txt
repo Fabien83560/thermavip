@@ -262,6 +262,15 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/thermavipConfig.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/thermavip )
 		
 
+# Qt modules the installed public headers require. Without a Requires field a
+# pkg-config consumer gets no Qt include path at all and fails on the first
+# translation unit: 121 of the 194 installed headers include a Qt header.
+if(QT_VERSION_MAJOR LESS 6)
+	set(THERMAVIP_PC_REQUIRES "Qt5Core Qt5Gui Qt5Widgets Qt5Network Qt5Xml Qt5Sql Qt5PrintSupport Qt5OpenGL Qt5Svg Qt5Concurrent")
+else()
+	set(THERMAVIP_PC_REQUIRES "Qt6Core Qt6Gui Qt6Widgets Qt6Network Qt6Xml Qt6Sql Qt6PrintSupport Qt6OpenGL Qt6OpenGLWidgets Qt6Svg Qt6Concurrent Qt6Core5Compat")
+endif()
+
 # Generate thermavip.pc
 list(TRANSFORM PLUGINS_LIBS PREPEND "-l")
 configure_file(thermavip.pc.in thermavip.pc @ONLY)
