@@ -111,6 +111,7 @@ set(THERMAVIP_PLUGIN_DIR "${CMAKE_INSTALL_PREFIX}/thermavip/VipPlugins" CACHE IN
 set(THERMAVIP_EXAMPLE_DIR "${CMAKE_INSTALL_PREFIX}/examples" CACHE INTERNAL "THERMAVIP_EXAMPLE_DIR")
 set(THERMAVIP_TEST_DIR "${CMAKE_INSTALL_PREFIX}/tests" CACHE INTERNAL "THERMAVIP_TEST_DIR")
 set(THERMAVIP_EXAMPLE_SETUP_FILE ${PROJECT_SOURCE_DIR}/src/Examples/setup_example.cmake CACHE INTERNAL "THERMAVIP_EXAMPLE_SETUP_FILE")
+set(THERMAVIP_TEST_SETUP_FILE ${PROJECT_SOURCE_DIR}/src/Tests/setup_example.cmake CACHE INTERNAL "THERMAVIP_TEST_SETUP_FILE")
 
 
 configure_file(VipBuildConfig.h.in VipBuildConfig.h)
@@ -138,6 +139,12 @@ install(DIRECTORY skins DESTINATION "${THERMAVIP_APPLICATION_DIR}")
 install(DIRECTORY help DESTINATION "${THERMAVIP_APPLICATION_DIR}")
 install(DIRECTORY icons DESTINATION "${THERMAVIP_APPLICATION_DIR}")
 install(DIRECTORY fonts DESTINATION "${THERMAVIP_APPLICATION_DIR}")
+
+# enable_testing() is called explicitly so the `test` target exists
+# regardless of BUILD_TESTING. WITH_TESTS stays the project switch.
+# Must precede add_subdirectory(src): add_test() only counts afterwards.
+include(CTest)
+enable_testing()
 
 add_subdirectory(src)
 

@@ -48,4 +48,8 @@ jobs:
               cmake --build ./ 
               cmake --build . --target install
 
+        - name: Run tests
+          run: ctest --test-dir build --output-on-failure
+          shell: bash
+
         
