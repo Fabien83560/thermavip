@@ -6,12 +6,10 @@ set(THERMAVIP_FOUND true)
 set(THERMAVIP_INCLUDE_DIRS ${PACKAGE_PREFIX_DIR}/include ${PACKAGE_PREFIX_DIR}/include/VipLogging ${PACKAGE_PREFIX_DIR}/include/VipDataType ${PACKAGE_PREFIX_DIR}/include/VipPlotting ${PACKAGE_PREFIX_DIR}/include/VipCore ${PACKAGE_PREFIX_DIR}/include/VipGui ${PACKAGE_PREFIX_DIR}/include/VipAnnotation)
 
 
-math(EXPR BITS "8*${CMAKE_SIZEOF_VOID_P}")
-IF(${BITS} MATCHES "64" AND UNIX)
-	set_and_check(THERMAVIP_LIB_DIR ${PACKAGE_PREFIX_DIR}/lib64)
-ELSE()
-	set_and_check(THERMAVIP_LIB_DIR ${PACKAGE_PREFIX_DIR}/lib)
-ENDIF()
+# Library directory, as actually used by the installation: substituted from
+# the producing project, where GNUInstallDirs set it. It used to be derived
+# from the pointer size, which disagrees with GNUInstallDirs on Debian and
+# Ubuntu, and set_and_check() then aborted the consumer's find_package().
 
 #IF(WIN32)
 #	set_and_check(THERMAVIP_BIN_DIR ${PACKAGE_PREFIX_DIR}/bin)
