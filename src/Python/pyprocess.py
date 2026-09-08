@@ -127,7 +127,12 @@ def pyToBytes(obj):
     elif isinstance(obj, (float)):
         return bytes(struct.pack('<i',PY_CODE_DOUBLE)) + bytes(struct.pack('<d',float(obj)))
     elif isinstance(obj, (str)):
-        return bytes(struct.pack('<i',PY_CODE_STRING)) + bytes(struct.pack('<i',len(obj)*2)) + obj.encode('utf-16le')
+        # Measure the payload, not the code points: anything outside the basic
+        # multilingual plane takes four bytes in UTF-16, so len(obj)*2 under
+        # declared the length, truncated the string and shifted every object after
+        # it in the frame. The neighbouring branch above already encodes first.
+        val = obj.encode('utf-16le')
+        return bytes(struct.pack('<i',PY_CODE_STRING)) + bytes(struct.pack('<i',len(val))) + val
     elif isinstance(obj, (bytes)):
         return bytes(struct.pack('<i',PY_CODE_BYTES)) + bytes(struct.pack('<i',len(obj))) + obj
     elif isinstance(obj, (complex)):
@@ -452,7 +457,11 @@ def interpret_input():
         value, l = bytesToPy(b)
         return value
         
-    return None
+    # An unknown code used to fall through here without consuming anything, so its
+    # payload was read back byte by byte as further commands: a 'q' anywhere in the
+    # data exits the process, an 'e' starts executing the bytes that follow. There
+    # is no synchronisation mark to recover from that, so stop instead.
+    raise ValueError('unknown command code %r in python stream' % code)
 
 
 def format_exec(code):
