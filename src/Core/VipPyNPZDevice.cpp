@@ -143,23 +143,37 @@ void VipPyNPZDevice::close()
 
 	QString file = removePrefix(path());
 	file.replace("\\", "/");
-	QString code;
-	{
-		code = "import numpy as np\n"
-		       "np.savez('" +
-		       file + "', " + dataname + "=" + varname +
-		       ")\n"
-		       "del " +
-		       varname +
-		       "\n"
-		       "del " +
-		       newname;
+
+	// The path used to be pasted between quotes in the generated source. It is not
+	// the user's alone: a device path is written to the session file and restored
+	// from it unchecked, so a single quote in it closed the literal and the rest ran
+	// as Python. Send it as an object, like the array itself, so that only generated
+	// identifiers appear in the source.
+	const QString pathvar = "pth" + QString::number((qint64)this);
+	const QString namevar = "nam" + QString::number((qint64)this);
+
+	VipPyError lastError = VipPyInterpreter::instance()->sendObject(pathvar, QVariant::fromValue(file)).value(10000).value<VipPyError>();
+	if (!lastError.isNull()) {
+		setError(lastError.traceback);
+		return;
 	}
+	lastError = VipPyInterpreter::instance()->sendObject(namevar, QVariant::fromValue(dataname)).value(10000).value<VipPyError>();
+	if (!lastError.isNull()) {
+		setError(lastError.traceback);
+		return;
+	}
+
+	const QString code = "import numpy as np\n"
+			     "np.savez(" + pathvar + ", **{" + namevar + ": " + varname + "})\n"
+			     "del " + varname + "\n"
+			     "del " + newname + "\n"
+			     "del " + pathvar + "\n"
+			     "del " + namevar;
 
 	d_data->dataname.clear();
 	d_data->previous = VipNDArray();
 
-	VipPyError lastError = VipPyInterpreter::instance()->execCode(code).value(10000).value<VipPyError>();
+	lastError = VipPyInterpreter::instance()->execCode(code).value(10000).value<VipPyError>();
 	if (!lastError.isNull()) {
 		setError(lastError.traceback);
 		return;
@@ -278,30 +292,36 @@ void VipPyMATDevice::close()
 
 	QString file = removePrefix(path());
 	file.replace("\\", "/");
-	QString code;
 
-	code = "from scipy.io import savemat\n"
-	       "d={'" +
-	       dataname + "':" + varname +
-	       "}\n"
-	       //"print(d)\n"
-	       "savemat('" +
-	       file +
-	       "', d)\n"
-	       "del " +
-	       varname +
-	       "\n"
-	       "del " +
-	       newname +
-	       "\n"
-	       "del d";
+	// Same as the NPZ device above: the path comes back from a session file, so it
+	// travels as an object rather than as source text.
+	const QString pathvar = "pth" + QString::number((qint64)this);
+	const QString namevar = "nam" + QString::number((qint64)this);
 
-	// vip_debug("%s\n", code.toLatin1().data());
+	VipPyError lastError = VipPyInterpreter::instance()->sendObject(pathvar, QVariant::fromValue(file)).value(10000).value<VipPyError>();
+	if (!lastError.isNull()) {
+		setError(lastError.traceback);
+		return;
+	}
+	lastError = VipPyInterpreter::instance()->sendObject(namevar, QVariant::fromValue(dataname)).value(10000).value<VipPyError>();
+	if (!lastError.isNull()) {
+		setError(lastError.traceback);
+		return;
+	}
+
+	const QString code = "from scipy.io import savemat\n"
+			     "d={" + namevar + ": " + varname + "}\n"
+			     "savemat(" + pathvar + ", d)\n"
+			     "del " + varname + "\n"
+			     "del " + newname + "\n"
+			     "del " + pathvar + "\n"
+			     "del " + namevar + "\n"
+			     "del d";
 
 	d_data->dataname.clear();
 	d_data->previous = VipNDArray();
 
-	VipPyError lastError = VipPyInterpreter::instance()->execCode(code).value(10000).value<VipPyError>();
+	lastError = VipPyInterpreter::instance()->execCode(code).value(10000).value<VipPyError>();
 	if (!lastError.isNull()) {
 		setError(lastError.traceback);
 		return;
