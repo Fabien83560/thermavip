@@ -1,1 +1,1 @@
-# No test on this module yet.
+add_subdirectory(Serialization)

@@ -400,14 +400,9 @@ private Q_SLOTS:
 		}
 	}
 
-	/// A processing list serialises an element count, and the reader used that
-	/// count directly as a loop bound. A session file declaring a huge one made
-	/// the reader allocate until memory ran out, silently.
-	///
-	/// The archive is written normally, then the count is rewritten in the XML,
-	/// which is exactly what a crafted session file looks like. The read must
-	/// come back promptly, leave the list empty, and report the error.
-	void hugeCountInSessionIsRejected()
+	/// The list writer records an element count. Kept separate from the read
+	/// below so that a failure points at one side or the other.
+	void sessionListWritesItsCount()
 	{
 		VipProcessingList source;
 		// A registered processing: the writer only serialises those the factory
@@ -416,10 +411,20 @@ private Q_SLOTS:
 
 		VipXOStringArchive out;
 		QVERIFY(out.content("list", &source));
+		QVERIFY2(out.toString().contains(">1</count>"), qPrintable(out.toString()));
+	}
 
-		QString xml = out.toString();
-		QVERIFY2(xml.contains(">1</count>"), qPrintable(xml));
-		xml.replace(QStringLiteral(">1</count>"), QStringLiteral(">100000000</count>"));
+	/// The reader used that count directly as a loop bound, so a session file
+	/// declaring a huge one made it allocate until memory ran out, silently.
+	/// The archive here is a fixed string rather than one just written, which is
+	/// what a crafted session file actually is.
+	void hugeCountInSessionIsRejected()
+	{
+		const QString xml = QStringLiteral(
+			"<list type_name=\"VipProcessingList*\">"
+			"<processing_name type_name=\"QString\"></processing_name>"
+			"<count type_name=\"qlonglong\">100000000</count>"
+			"</list>");
 
 		VipProcessingList target;
 		VipXIStringArchive in(xml);
