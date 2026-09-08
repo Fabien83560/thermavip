@@ -8,6 +8,8 @@
 
 #include "vip_test_main.h"
 
+#include <QtEndian>
+
 #include "VipArchive.h"
 #include "VipXmlArchive.h"
 
@@ -211,6 +213,69 @@ private Q_SLOTS:
 		int value = 0;
 		in.content("anything", value);
 		QVERIFY(true); // the call returned
+	}
+
+	/// Lengths announced by a binary archive used to size buffers before anything
+	/// checked them, so one corrupted field asked for an arbitrary allocation. The
+	/// reader must report the record instead. One of the callers builds an archive
+	/// from the first bytes of a file just to detect its format, which puts this
+	/// path ahead of any validation.
+	void binaryImplausibleNameLengthIsRejected()
+	{
+		QByteArray buffer;
+		{
+			VipBinaryArchive out(&buffer, QIODevice::WriteOnly);
+			QVERIFY(out.content("number", 42));
+		}
+		QVERIFY(buffer.size() > 3 * (int)sizeof(qsizetype));
+
+		// The name length is the second field of the record.
+		const qsizetype huge = qToLittleEndian<qsizetype>(Q_INT64_C(0x0000ffffffffffff));
+		memcpy(buffer.data() + sizeof(qsizetype), &huge, sizeof(huge));
+
+		VipBinaryArchive in(buffer);
+		int number = 0;
+		in.content("number", number);
+
+		QVERIFY2(in.hasError(), "an implausible name length must be reported, not allocated");
+		QCOMPARE(number, 0);
+	}
+
+	/// Same guard on the negative side: the lengths are signed and come from the
+	/// file, so they can be negative.
+	void binaryNegativeNameLengthIsRejected()
+	{
+		QByteArray buffer;
+		{
+			VipBinaryArchive out(&buffer, QIODevice::WriteOnly);
+			QVERIFY(out.content("number", 42));
+		}
+
+		const qsizetype negative = qToLittleEndian<qsizetype>(Q_INT64_C(-8));
+		memcpy(buffer.data() + sizeof(qsizetype), &negative, sizeof(negative));
+
+		VipBinaryArchive in(buffer);
+		int number = 0;
+		in.content("number", number);
+
+		QVERIFY(in.hasError());
+	}
+
+	/// A record cut in half must be reported rather than read as if complete.
+	void truncatedBinaryContentIsReported()
+	{
+		QByteArray buffer;
+		{
+			VipBinaryArchive out(&buffer, QIODevice::WriteOnly);
+			QVERIFY(out.content("text", QString("hello world, at some length")));
+		}
+		buffer.truncate(buffer.size() / 2);
+
+		VipBinaryArchive in(buffer);
+		QString text;
+		in.content("text", text);
+
+		QVERIFY2(in.hasError(), "a truncated record must be reported");
 	}
 };
 
