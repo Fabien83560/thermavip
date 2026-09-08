@@ -110,6 +110,13 @@ bool VipPySignalGenerator::open(VipIODevice::OpenModes mode)
 
 	if (code.isEmpty())
 		return false;
+	// The code below is a property, and properties come back from session files.
+	// One session is opened at every start without asking, so running it would
+	// mean running whatever that file chose.
+	if (!vipCanRunRestoredPythonCode(this)) {
+		setError("Python code restored from a session file was not run");
+		return false;
+	}
 	if (deviceType() == Temporal && (end - start) <= 0)
 		return false;
 	if (sampling <= 0)

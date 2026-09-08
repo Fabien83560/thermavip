@@ -4898,6 +4898,10 @@ VipArchive& operator>>(VipArchive& stream, VipProcessingObject* r)
 			stream.restore();
 	}
 
+	// Mark the object as coming from a file. Its properties are now whatever the
+	// file said, and some processings turn a property into executable code.
+	r->setProperty("_vip_from_archive", true);
+
 	// initialize
 	r->initialize(true);
 	stream.resetError();

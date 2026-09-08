@@ -13,6 +13,8 @@
 
 #include "VipPyNPZDevice.h"
 #include "VipPyOperation.h"
+#include "VipPyGenerator.h"
+#include "VipXmlArchive.h"
 
 #include <QDir>
 #include <QFile>
@@ -115,6 +117,57 @@ private Q_SLOTS:
 		device.close();
 
 		QVERIFY2(!QFile::exists(markerPath()), "the path must never be executed as Python");
+	}
+
+	/// A signal generator holds its expression in a property, and properties are
+	/// written to the session file and read back from it. The application opens
+	/// one session at every start without asking, so restoring the device used to
+	/// be enough to run whatever code that file carried. Restored code must not run
+	/// on its own.
+	void restoredGeneratorCodeDoesNotRun()
+	{
+		const QString code = QStringLiteral("open(r'%1', 'w').write('x')\nvalue = 1.0\n").arg(markerPath());
+
+		QString session;
+		{
+			VipPySignalGenerator source;
+			source.propertyAt(0)->setData((qint64)1000000000);
+			source.propertyAt(1)->setData((qint64)0);
+			source.propertyAt(2)->setData((qint64)1000000000);
+			source.propertyAt(3)->setData(code);
+
+			VipXOStringArchive out;
+			out.start("root");
+			out.content(&source);
+			out.end();
+			session = out.toString();
+		}
+		QFile::remove(markerPath());
+
+		VipXIStringArchive in(session);
+		QVERIFY(in.isOpen());
+		QVERIFY(in.start("root"));
+
+		VipPySignalGenerator restored;
+		in.content(&restored);
+		QCOMPARE(restored.propertyAt(3)->value<QString>(), code);
+
+		const bool opened = restored.open(VipIODevice::ReadOnly);
+		QVERIFY2(!QFile::exists(markerPath()), "a restored expression must not be executed");
+		QVERIFY2(!opened, "a restored expression must not be opened for reading");
+	}
+
+	/// The same expression typed by the user still runs: the gate is about where
+	/// the code came from, not about the code.
+	void generatorCodeTypedByTheUserStillRuns()
+	{
+		VipPySignalGenerator generator;
+		generator.propertyAt(0)->setData((qint64)1000000000);
+		generator.propertyAt(1)->setData((qint64)0);
+		generator.propertyAt(2)->setData((qint64)1000000000);
+		generator.propertyAt(3)->setData(QStringLiteral("value = 1.0"));
+
+		QVERIFY(generator.open(VipIODevice::ReadOnly));
 	}
 };
 

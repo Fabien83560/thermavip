@@ -625,6 +625,14 @@ void VipPyProcessing::resetProcessing() {}
 
 void VipPyProcessing::mergeData(int, int)
 {
+	// The code below is a property, and properties come back from session files.
+	// One session is opened at every start without asking, so running it would
+	// mean running whatever that file chose.
+	if (!vipCanRunRestoredPythonCode(this)) {
+		setError("Python code restored from a session file was not run");
+		return;
+	}
+
 	VipPyCommandList cmds;
 
 	// initialize the standard processing (if any) based on 'ThermavipPyProcessing' class

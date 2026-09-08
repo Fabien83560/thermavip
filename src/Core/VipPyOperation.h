@@ -647,4 +647,23 @@ private:
 	VIP_DECLARE_PRIVATE_DATA();
 };
 
+/// @brief Whether Python source restored from a session file may be run.
+///
+/// A session file stores the properties of the processings it holds, and several
+/// processings turn a property into executable code. Opening a session therefore
+/// chooses what runs, and the application opens one at every start without
+/// asking. Off by default: turn it on once the user has seen the code and
+/// accepted it.
+class VipProcessingObject;
+
+VIP_CORE_EXPORT void vipSetRestoredPythonCodeAllowed(bool allowed);
+VIP_CORE_EXPORT bool vipRestoredPythonCodeAllowed();
+
+/// @brief Whether @a obj may run Python it received from a session file.
+/// Refusals are logged once per object.
+VIP_CORE_EXPORT bool vipCanRunRestoredPythonCode(VipProcessingObject* obj);
+
+/// @brief Accept the Python @a obj carries, as an explicit user decision.
+VIP_CORE_EXPORT void vipAllowRestoredPythonCode(VipProcessingObject* obj);
+
 #endif

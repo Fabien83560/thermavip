@@ -32,6 +32,7 @@
 #include <iostream>
 #include <cmath>
 #include <set>
+#include <atomic>
 #include <deque>
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -2215,6 +2216,38 @@ public:
 	PyLaunchCode launchCode;
 	QPointer<QObject> interp;
 };
+
+// Session files carry the Python properties of the processings they store, so
+// opening one chooses what runs. Refused unless the user has said otherwise.
+static std::atomic<bool> _vip_restored_python_allowed{ false };
+
+void vipSetRestoredPythonCodeAllowed(bool allowed)
+{
+	_vip_restored_python_allowed = allowed;
+}
+bool vipRestoredPythonCodeAllowed()
+{
+	return _vip_restored_python_allowed;
+}
+
+void vipAllowRestoredPythonCode(VipProcessingObject* obj)
+{
+	if (obj)
+		obj->setProperty("_vip_from_archive", false);
+}
+
+bool vipCanRunRestoredPythonCode(VipProcessingObject* obj)
+{
+	if (!obj || _vip_restored_python_allowed)
+		return true;
+	if (!obj->property("_vip_from_archive").toBool())
+		return true;
+	if (!obj->property("_vip_refused_python").toBool()) {
+		obj->setProperty("_vip_refused_python", true);
+		VIP_LOG_ERROR("Refusing to run Python code restored from a session file in '" + obj->objectName() + "'");
+	}
+	return false;
+}
 
 VipPyInterpreter::VipPyInterpreter(QObject* parent)
   : VipPyIOOperation(parent)
