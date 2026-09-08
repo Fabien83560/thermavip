@@ -2057,6 +2057,9 @@ QStringList VipPyInterpreter::addProcessingFile(const QFileInfo& file, const QSt
 	QFile in(file.canonicalFilePath());
 	in.open(QFile::ReadOnly);
 	QString code = in.readAll();
+	// Scanning a directory runs every Python file in it. Say which ones, so that the
+	// mechanism is at least visible to the user it runs as.
+	VIP_LOG_INFO("Running Python file: " + file.canonicalFilePath());
 	VipPyError err = this->execCode(code).value(20000).value<VipPyError>();
 	if (!err.isNull()) {
 		VIP_LOG_WARNING("Cannot load Python processing: " + file.baseName());
@@ -2108,6 +2111,13 @@ QStringList VipPyInterpreter::addProcessingFile(const QFileInfo& file, const QSt
 
 QStringList VipPyInterpreter::addProcessingDirectory(const QString& dir, bool register_processings)
 {
+	// A relative directory is resolved against the working directory of the process,
+	// so starting the application from a folder that happens to hold one of these
+	// names ran everything inside it. Only an explicit location is accepted.
+	if (QDir::isRelativePath(dir)) {
+		VIP_LOG_ERROR("Refusing to run Python from a relative directory: " + dir);
+		return QStringList();
+	}
 	return addProcessingDirectoryInternal(dir, QString(), register_processings);
 }
 

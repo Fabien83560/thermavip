@@ -186,6 +186,9 @@ def bytesToPy(b):
     elif dt == PY_CODE_COMPLEX: return (complex(struct.unpack('<d',b[4:12])[0], struct.unpack('<d',b[12:20])[0]) , 20)
     elif dt == PY_CODE_STRING: 
         l = struct.unpack('<i',b[4:8])[0]
+        # Signed, and read from the frame: neither the sign nor the fit was checked.
+        if l < 0 or 8 + l > len(b):
+            raise ValueError('invalid length %d in python frame' % l)
         obj = b[8:l+8]
         res= (obj.decode('utf-16le') , 8 +l)
         if sys.version_info[0]==2:
@@ -195,24 +198,43 @@ def bytesToPy(b):
         return res
     elif dt == PY_CODE_BYTES:
         l = struct.unpack('<i',b[4:8])[0]
+        # Signed, and read from the frame: neither the sign nor the fit was checked.
+        if l < 0 or 8 + l > len(b):
+            raise ValueError('invalid length %d in python frame' % l)
         return (b[8:l+8] , 8 +l)
     elif dt == PY_CODE_LIST:
         l = struct.unpack('<i',b[4:8])[0]
+        # A count of two billion in a sixteen byte frame used to be honoured, one
+        # allocation at a time, until the process was killed. Each element takes at
+        # least eight bytes.
+        if l < 0 or 8 + l * 8 > len(b):
+            raise ValueError('invalid element count %d in python frame' % l)
         start = 8
         res = []
         for i in range(l):
             tmp, size = bytesToPy(b[start:])
             res += [tmp]
+            if size <= 0:
+                raise ValueError('python frame element consumed no bytes')
             start += size
         return (res,start)
     elif dt == PY_CODE_DICT:
         l = struct.unpack('<i',b[4:8])[0]
+        # A count of two billion in a sixteen byte frame used to be honoured, one
+        # allocation at a time, until the process was killed. Each element takes at
+        # least eight bytes.
+        if l < 0 or 8 + l * 8 > len(b):
+            raise ValueError('invalid element count %d in python frame' % l)
         start = 8
         res = {}
         for i in range(l):
             key, size = bytesToPy(b[start:])
+            if size <= 0:
+                raise ValueError('python frame element consumed no bytes')
             start += size
             tmp, size = bytesToPy(b[start:])
+            if size <= 0:
+                raise ValueError('python frame element consumed no bytes')
             start += size
             res[key] = tmp
         return (res, start)
@@ -229,14 +251,21 @@ def bytesToPy(b):
     elif dt == PY_CODE_NDARRAY:
         nt = b[4:5]
         sc = struct.unpack('<i',b[5:9])[0]  
+        # numpy caps an array at 32 dimensions, and each one takes four bytes.
+        if sc < 0 or sc > 32 or 9 + sc * 4 > len(b):
+            raise ValueError('invalid dimension count %d in python frame' % sc)
         shape = []
         start = 9
         size=1
         for s in range(sc):
             shape += [struct.unpack('<i',b[start:start+4])[0] ]
             start += 4
+            if shape[-1] < 0:
+                raise ValueError('negative dimension in python frame')
             size *= shape[-1]
         nt = numpy.dtype(nt)
+        if size * nt.itemsize > len(b) - start:
+            raise ValueError('python frame is shorter than the array it announces')
         res= numpy.frombuffer(b[start:],nt)
         
         if __debug_on : __debug("read array " + str(len(b)) + " " +str(shape) + " " + str(nt) + " " + str(res.shape))
