@@ -30,6 +30,7 @@
  */
 
 #include <limits>
+#include "VipLogging.h"
 
 #include <QApplication>
 #include <QBoxLayout>
@@ -416,10 +417,9 @@ void VipDoubleEdit::setValue(double value)
 	if (f.isEmpty())
 		f = "%g";
 
-	char val[50];
-	memset(val, 0, sizeof(val));
-	snprintf(val, 50, f.toLatin1().data(), value);
-	setText(QString(val));
+	// asprintf rather than a 50 byte buffer: a wide field silently truncated
+	// the value shown to the user. The format itself is validated on the setter.
+	setText(QString::asprintf(f.toLatin1().constData(), value));
 	setStyleSheet(m_rightStyle);
 
 	this->blockSignals(blocked);
@@ -445,8 +445,23 @@ void VipDoubleEdit::setWrongStyle(const QString& style)
 		setStyleSheet(style);
 }
 
+// A printf format reaching snprintf must be a single floating point
+// conversion. These formats are settable through a Qt style sheet property,
+// and style sheets come from the editable symbols of a session archive, so
+// the string is untrusted: %s reads an arbitrary pointer, %n writes to one,
+// and a wide field silently truncates the displayed value.
+static bool vipIsSafeDoubleFormat(const QString& f)
+{
+	static const QRegularExpression re(QStringLiteral("^[^%]*%[-+ #0]{0,3}[0-9]{0,3}(\\.[0-9]{0,3})?[eEfgG][^%]*$"));
+	return re.match(f).hasMatch();
+}
+
 void VipDoubleEdit::setFormat(const QString& format)
 {
+	if (!format.isEmpty() && !vipIsSafeDoubleFormat(format)) {
+		VIP_LOG_WARNING("VipDoubleEdit: rejected format string: " + format);
+		return;
+	}
 	m_format = format;
 	if (isValid())
 		setValue(value());
@@ -488,10 +503,7 @@ void VipDoubleEdit::enterPressed()
 			if (f.isEmpty())
 				f = "%g";
 
-			char val[50];
-			memset(val, 0, sizeof(val));
-			snprintf(val, 50, f.toLatin1().data(), m_value);
-			setText(QString(val));
+			setText(QString::asprintf(f.toLatin1().constData(), m_value));
 			setStyleSheet(m_rightStyle);
 		}
 		this->blockSignals(blocked);
@@ -618,6 +630,10 @@ void VipMultiComponentDoubleEdit::setSeparator(const QString& sep)
 }
 void VipMultiComponentDoubleEdit::setFormat(const QString& format)
 {
+	if (!format.isEmpty() && !vipIsSafeDoubleFormat(format)) {
+		VIP_LOG_WARNING("VipMultiComponentDoubleEdit: rejected format string: " + format);
+		return;
+	}
 	d_data->format = format;
 	this->applyFormat();
 }
@@ -686,10 +702,7 @@ void VipMultiComponentDoubleEdit::applyFormat()
 			if (f.isEmpty())
 				f = "%g";
 
-			char val[50];
-			memset(val, 0, sizeof(val));
-			snprintf(val, 50, f.toLatin1().data(), value[i]);
-			res += (QString(val));
+			res += QString::asprintf(f.toLatin1().constData(), value[i]);
 			if (i < value.size() - 1)
 				res += " " + separator() + " ";
 		}
