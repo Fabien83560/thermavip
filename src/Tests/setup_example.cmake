@@ -28,12 +28,19 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Test)
 target_link_libraries(${TARGET_PROJECT} PRIVATE Qt${QT_VERSION_MAJOR}::Test)
 
 # On Windows each SDK DLL lives next to its own target, so a test launched by
-# CTest would not find them. Elsewhere the build-tree RPATH is enough.
-if(WIN32 AND NOT CMAKE_VERSION VERSION_LESS 3.21)
-	add_custom_command(TARGET ${TARGET_PROJECT} POST_BUILD
-		COMMAND ${CMAKE_COMMAND} -E copy_if_different
-			$<TARGET_RUNTIME_DLLS:${TARGET_PROJECT}> $<TARGET_FILE_DIR:${TARGET_PROJECT}>
-		COMMAND_EXPAND_LISTS)
+# CTest would not find them. The directories are put on PATH at test time rather
+# than copied next to the executable: a copy is only refreshed when the test
+# target itself relinks, so a library rebuilt on its own left the test running
+# against a stale DLL and reporting a result that was no longer true.
+# Elsewhere the build-tree RPATH is enough.
+set(_vip_test_env_mod "")
+if(WIN32)
+	foreach(_lib IN LISTS THERMAVIP_LIBRARIES)
+		if(TARGET ${_lib})
+			list(APPEND _vip_test_env_mod "PATH=path_list_prepend:$<TARGET_FILE_DIR:${_lib}>")
+		endif()
+	endforeach()
+	list(APPEND _vip_test_env_mod "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>")
 endif()
 
 # _CRTDBG_MAP_ALLOC is deliberately not defined: it turns malloc and free into
@@ -55,6 +62,9 @@ add_test(NAME ${TARGET_PROJECT} COMMAND ${TARGET_PROJECT})
 set_tests_properties(${TARGET_PROJECT} PROPERTIES
 	ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${_vip_qt_plugins}"
 	TIMEOUT 300)
+if(_vip_test_env_mod)
+	set_tests_properties(${TARGET_PROJECT} PROPERTIES ENVIRONMENT_MODIFICATION "${_vip_test_env_mod}")
+endif()
 
 # Install in "tests" folder
 install(TARGETS ${TARGET_PROJECT}
