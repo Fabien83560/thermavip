@@ -14,6 +14,7 @@
 #include "VipPyNPZDevice.h"
 #include "VipPyOperation.h"
 #include "VipPyGenerator.h"
+#include "VipPyProcessing.h"
 #include "VipXmlArchive.h"
 
 #include <QDir>
@@ -168,6 +169,30 @@ private Q_SLOTS:
 		generator.propertyAt(3)->setData(QStringLiteral("value = 1.0"));
 
 		QVERIFY(generator.open(VipIODevice::ReadOnly));
+	}
+
+	/// The parameters of a scriptable processing used to be turned into the source
+	/// of the call that applies them: name, an equals sign, the value, all joined
+	/// with commas inside setParameters(...). Both halves come out of a session
+	/// file, so a closing parenthesis in a value ended the call and what followed
+	/// ran as top level Python, at archive read time and with no user action.
+	void processingParametersCannotInjectCode()
+	{
+		QVERIFY(run(QStringLiteral("class ThermavipMarkerProc:\n"
+					   "    def setParameters(self, **kw): pass\n"
+					   "procs = {}\n")));
+
+		VipProcessingObject::Info info("MarkerProc", QString(), "Python", QIcon(), qMetaTypeId<VipPyProcessing*>());
+		VipProcessingObject::registerAdditionalInfoObject(info);
+
+		VipPyProcessing processing;
+		QVERIFY2(processing.setStdPyProcessingFile("MarkerProc"), "the fixture class must be reachable");
+
+		QVariantMap params;
+		params["victim"] = QStringLiteral("1) or open(r'%1', 'w').write('x') or (1").arg(markerPath());
+		processing.setStdProcessingParameters(params);
+
+		QVERIFY2(!QFile::exists(markerPath()), "a parameter value must never be executed as Python");
 	}
 };
 

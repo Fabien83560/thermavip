@@ -433,10 +433,11 @@ void VipPyParametersEditor::updateProcessing()
 			value = box->value();
 		else if (QCheckBox* box = qobject_cast<QCheckBox*>(ed))
 			value = int(box->isChecked());
+		// No quoting: the value reaches Python as an object, not as source text.
 		else if (VipComboBox* box = qobject_cast<VipComboBox*>(ed))
-			value = "'" + box->currentText() + "'";
+			value = box->currentText();
 		else if (VipLineEdit* line = qobject_cast<VipLineEdit*>(ed))
-			value = "'" + line->text() + "'";
+			value = line->text();
 		else if (Vip2DDataEditor* other = qobject_cast<Vip2DDataEditor*>(ed))
 			value = QVariant::fromValue(other->value());
 		map[name] = value;

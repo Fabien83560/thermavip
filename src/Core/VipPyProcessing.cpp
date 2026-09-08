@@ -314,8 +314,11 @@ void VipPyProcessing::setStdProcessingParameters(const QVariantMap& args, const 
 	d_data->stdProcessingParameters = args;
 	d_data->extractParameters.clear();
 
-	// build the dict of parameters
-	QStringList parameters;
+	// Names and values used to be pasted into the source of the call. Both come
+	// out of a session file, where a closing parenthesis or a newline in either
+	// ended the call and ran the rest as top level Python. They travel as one
+	// object now, so the source holds nothing but generated identifiers.
+	QVariantMap kwargs;
 	for (QVariantMap::iterator it = d_data->stdProcessingParameters.begin(); it != d_data->stdProcessingParameters.end(); ++it) {
 		// for 'other' type, send the object before in the 'other' variable
 		if (it.value().userType() == qMetaTypeId<VipOtherPlayerData>()) {
@@ -334,25 +337,38 @@ void VipPyProcessing::setStdProcessingParameters(const QVariantMap& args, const 
 				VipPyInterpreter::instance()->sendObject("other", value).wait(5000);
 			else
 				cmds->push_back(vipCSendObject("other", value));
-			parameters << it.key() + "= other";
+			kwargs.insert(it.key(), value);
 		}
-		else
-			parameters << it.key() + "=" + it.value().toString();
+		else {
+			QVariant value = it.value();
+			// Older sessions, and the editor before it stopped doing so, stored text
+			// parameters already quoted, because the value went into the source.
+			if (value.userType() == QMetaType::QString) {
+				const QString s = value.toString();
+				if (s.size() > 1 && s.startsWith(QLatin1Char('\'')) && s.endsWith(QLatin1Char('\'')))
+					value = s.mid(1, s.size() - 2);
+			}
+			kwargs.insert(it.key(), value);
+		}
 	}
 
 	// set the parameters if required
-	if (parameters.size()) {
-		QString classname = "Thermavip" + d_data->std_proc_name;
-		QString id = QString::number(qint64(this));
-		QString code = "pr = procs[" + id +
-			       "]\n"
-			       "pr.setParameters(" +
-			       parameters.join(",") + ")\n";
+	if (!kwargs.isEmpty()) {
+		const QString id = QString::number(qint64(this));
+		const QString argsvar = "args" + id;
+		const QString code = "pr = procs[" + id +
+				     "]\n"
+				     "pr.setParameters(**" +
+				     argsvar + ")\n";
 
-		if (!cmds)
+		if (!cmds) {
+			VipPyInterpreter::instance()->sendObject(argsvar, QVariant::fromValue(kwargs)).wait(5000);
 			VipPyInterpreter::instance()->execCode(code).wait(5000);
-		else
+		}
+		else {
+			cmds->push_back(vipCSendObject(argsvar, QVariant::fromValue(kwargs)));
 			cmds->push_back(vipCExecCode(code, "code"));
+		}
 	}
 }
 
