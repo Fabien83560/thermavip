@@ -8,6 +8,7 @@
 #include "vip_test_main.h"
 
 #include "VipNDArray.h"
+#include "VipLongDouble.h"
 #include "VipVectors.h"
 
 class TestSerialization : public QObject
@@ -170,6 +171,47 @@ private Q_SLOTS:
 
 		QVERIFY(in.status() != QDataStream::Ok);
 		QVERIFY(read.isEmpty());
+	}
+
+	/// The width of an extended precision value is carried by a dynamic property
+	/// on the device, so any code holding that device sets it, and it used to be
+	/// passed as is to a raw read over a sixteen byte stack buffer. Anything wider
+	/// than the buffer must be refused.
+	void extendedPrecisionWidthIsBounded()
+	{
+		QByteArray payload(4096, '\xcc');
+		QDataStream in(payload);
+
+		const unsigned savedAsLongDouble = 1u << 31;
+		const vip_double value = vipReadLEDouble(savedAsLongDouble | 1000u, in);
+
+		QCOMPARE(in.status(), QDataStream::ReadCorruptData);
+		QCOMPARE(static_cast<double>(value), 0.0);
+	}
+
+	/// Same guard on the second reader, and on a width of zero.
+	void extendedPrecisionZeroWidthIsRejected()
+	{
+		QByteArray payload(4096, '\xcc');
+		QDataStream in(payload);
+
+		const unsigned savedAsLongDouble = 1u << 31;
+		vipReadLELongDouble(savedAsLongDouble | 0u, in);
+
+		QCOMPARE(in.status(), QDataStream::ReadCorruptData);
+	}
+
+	/// A width the buffer can hold, but the stream cannot supply, must be reported
+	/// rather than read as if complete.
+	void extendedPrecisionShortReadIsReported()
+	{
+		QByteArray payload(4, '\x01');
+		QDataStream in(payload);
+
+		const unsigned savedAsLongDouble = 1u << 31;
+		vipReadLEDouble(savedAsLongDouble | 10u, in);
+
+		QVERIFY(in.status() != QDataStream::Ok);
 	}
 };
 
