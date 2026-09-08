@@ -158,7 +158,25 @@ enable_testing()
 add_subdirectory(src)
 
 if(WIN32)
-	file(GLOB win32_tools "tools/win32/*.exe")
+	# Listed, not globbed: a binary dropped into that directory used to be shipped
+	# with the product without appearing in any review.
+	set(win32_tools
+		tools/win32/pdfdetach.exe
+		tools/win32/pdffonts.exe
+		tools/win32/pdfimages.exe
+		tools/win32/pdfinfo.exe
+		tools/win32/pdftohtml.exe
+		tools/win32/pdftopbm.exe
+		tools/win32/pdftopng.exe
+		tools/win32/pdftoppm.exe
+		tools/win32/pdftops.exe
+		tools/win32/pdftotext.exe
+	)
+	foreach(_tool IN LISTS win32_tools)
+		if(NOT EXISTS "${PROJECT_SOURCE_DIR}/${_tool}")
+			message(FATAL_ERROR "Missing third party tool: ${_tool}")
+		endif()
+	endforeach()
 	install(FILES ${win32_tools} DESTINATION "${THERMAVIP_APPLICATION_DIR}")
 endif()
 
