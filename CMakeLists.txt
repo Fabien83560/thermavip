@@ -65,7 +65,8 @@ if (NOT MSVC)
 	if(WITH_FFMPEG AND NOT WITH_LOCAL_FFMPEG)
 		# Make configure_ffmpeg executable
 		message(STATUS "Setup configure_ffmpeg")
-		execute_process(COMMAND chmod 777 ${PROJECT_SOURCE_DIR}/configure_ffmpeg)
+		# Executable, not writable by everyone: this file is then run by the build.
+		execute_process(COMMAND chmod 755 ${PROJECT_SOURCE_DIR}/configure_ffmpeg)
 		add_custom_target(ffmpeg_build ALL COMMAND ${PROJECT_SOURCE_DIR}/configure_ffmpeg)
 	endif()
 endif()

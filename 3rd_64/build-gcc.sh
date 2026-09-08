@@ -78,6 +78,10 @@ function configLine {
 }
 NASM_VERSION="2.15.05"
 NASM_PACKAGE="nasm-$NASM_VERSION"
+# Digest of nasm-2.15.05.tar.bz2 as published on www.nasm.us, taken over a
+# validated TLS connection on 2026-09-08. Upstream ships no checksum file, so
+# re-derive it from the same host if the version changes.
+NASM_SHA256="3c4b8339e5ab54b1bcb2316101f8985a5da50a3f9e504d43fa6f35668bee2fd0"
 #build nasm
 # `command -v` is the safe form; `nasm -v COMMAND` passed a stray argument.
 if ! command -v nasm > /dev/null 2>&1
@@ -88,7 +92,11 @@ then
        echo "Dir $NASM_PACKAGE does not exist."
        if [ ! -f $NASM_PACKAGE.tar.bz2 ]; then
            echo "Fetching $NASM_PACKAGE.tar.bz2"
-           wget https://www.nasm.us/pub/nasm/releasebuilds/$NASM_VERSION/$NASM_PACKAGE.tar.bz2 --no-check-certificate
+           # Certificate validation was switched off here, so anything on the path
+           # could hand over a different archive; the script then builds and installs
+           # it, and the result assembles everything else.
+           wget --https-only https://www.nasm.us/pub/nasm/releasebuilds/$NASM_VERSION/$NASM_PACKAGE.tar.bz2
+           echo "$NASM_SHA256  $NASM_PACKAGE.tar.bz2" | sha256sum -c -
        fi
        tar -xjf $NASM_PACKAGE.tar.bz2
     fi
@@ -96,11 +104,11 @@ then
     if [ -f $NASM_PACKAGE/install/bin/nasm ]; then
         echo "File nasm exists."
     else
-        cd $NASM_PACKAGE
+        cd $NASM_PACKAGE || { echo "Missing directory $NASM_PACKAGE, the fetch failed" ; exit 1 ; }
         ./configure --prefix="$PWD/install"
         make -j
         make install
-        chmod 777 install/bin/nasm
+        chmod 755 install/bin/nasm
         cd ..
     fi
     export PATH=$PWD/$NASM_PACKAGE/install/bin:$PATH
@@ -171,20 +179,24 @@ fi
 # cd ..
 
 
+KVAZAAR_VERSION="v2.3.2"
 #build kvazaar:
 FILE=kvazaar
 if [ -d $FILE ]; then
    echo "Dir $FILE exists."
 else
    echo "Dir $FILE does not exist."
+   # A tag, not the tip of the default branch: what gets linked into the shipped
+   # binary should not change from one build to the next.
    git clone https://github.com/ultravideo/kvazaar.git
+   ( cd kvazaar && git checkout "$KVAZAAR_VERSION" )
 fi
 
 FILE=kvazaar/install/lib/pkgconfig/kvazaar.pc
 if [ -f $FILE ]; then
    echo "File $FILE exists."
 else
-   cd kvazaar
+   cd kvazaar || { echo "Missing directory kvazaar, the fetch failed" ; exit 1 ; }
    #export CFLAGS=$CFLAGS:"-fPIC"
    echo 'Configuring kvazaar...'
    #replace line AM_PROG_AR by m4_ifdef([AM_PROG_AR], [AM_PROG_AR]) as it fails to work properly with older version of autoconf
@@ -205,20 +217,23 @@ fi
 export PKG_CONFIG_PATH=$PWD/kvazaar/install/lib/pkgconfig:$PKG_CONFIG_PATH
 export LD_LIBRARY_PATH=$PWD/kvazaar/install/lib:$LD_LIBRARY_PATH
 
+X264_COMMIT="b35605ace3ddf7c1a5d67a2eb553f034aef41d55"
 #build x264
 FILE=x264
 if [ -d $FILE ]; then
    echo "Dir $FILE exists."
 else
    echo "Dir $FILE does not exist."
+   # x264 publishes no tags, so the stable branch is pinned by commit.
    git clone https://code.videolan.org/videolan/x264.git
+   ( cd x264 && git checkout "$X264_COMMIT" )
 fi
 
 FILE=x264/x264.pc
 if [ -f $FILE ]; then
    echo "File $FILE exists."
 else
-   cd x264
+   cd x264 || { echo "Missing directory x264, the fetch failed" ; exit 1 ; }
    echo 'Configuring x264...'
    #sed -i 's/asm=\"auto\"/asm=\"nasm\"/' configure
    ./configure --enable-static --enable-pic --prefix=$PWD/install --enable-strip #--enable-rpath --extra-ldflags="-Wl,-rpath='$ORIGIN'"
@@ -243,7 +258,7 @@ else
 
 fi
 #FFMPEG_VERSION="4.4"
-cd ffmpeg
+cd ffmpeg || { echo "Missing directory ffmpeg, the fetch failed" ; exit 1 ; }
 git checkout n$FFMPEG_VERSION
 FILE=config.h
 if [ -f $FILE ]; then
