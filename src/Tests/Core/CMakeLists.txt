@@ -1,2 +1,3 @@
 add_subdirectory(Archive)
 add_subdirectory(ProcessingObject)
+add_subdirectory(CommandOptions)

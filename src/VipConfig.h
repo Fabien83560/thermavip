@@ -261,7 +261,10 @@ namespace detail
 			snprintf(st, static_cast<size_t>(1024 - s), format, std::forward<Args>(args)...);
 		}
 		buffer[sizeof(buffer) - 1] = 0;
-		fprintf(stderr, buffer);
+		// buffer is already formatted: passing it as a format string reinterprets any
+		// percent it picked up from the data being reported.
+		fputs(buffer, stderr);
+		fputc('\n', stderr);
 		std::abort();
 	}
 
