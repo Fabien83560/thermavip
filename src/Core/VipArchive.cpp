@@ -383,9 +383,10 @@ static bool toByteArray(const QVariant& v, QDataStream& stream)
 		return true;
 	}
 	else if (v.userType() == qMetaTypeId<QVariantMap>()) {
-		QByteArray res;
-		QDataStream str(&res, QIODevice::WriteOnly);
-		vipSafeVariantMapSave(str, v.value<QVariantMap>());
+		// This wrote into a local buffer that was destroyed on return, and reported
+		// success: nothing reached the stream, the header agreed with that, and the
+		// file read back an empty map with no error at all.
+		vipSafeVariantMapSave(stream, v.value<QVariantMap>());
 		return true;
 	}
 	else {
@@ -653,9 +654,21 @@ void VipBinaryArchive::doEnd()
 			// read the value size;
 			READ_DEVICE_INTEGER(full_size, m_device, );
 
-			if (full_size == -1) // start tag: increase level
+			// The else bound to the second test, not the first, so a start tag both
+			// raised the level and then seeked by sizeof(qsizetype) + (-1), which lands
+			// seven bytes in and reads the rest of the archive out of alignment.
+			if (full_size == -1) { // start tag: increase level
+				// A start tag is -1, the name length, the name, then -1 again. Skipping
+				// only the first marker left the reader inside the tag.
+				qsizetype name_size = 0;
+				READ_DEVICE_SIZE(name_size, m_device, );
+				if (!m_device->seek(m_device->pos() + name_size + (qint64)sizeof(qsizetype))) {
+					setError("Corrupted archive: truncated start tag");
+					return;
+				}
 				level++;
-			if (full_size == -2) {
+			}
+			else if (full_size == -2) {
 				if (level == 0)
 					break;
 				else
@@ -663,7 +676,10 @@ void VipBinaryArchive::doEnd()
 			}
 			else // otherwise, go to next data
 			{
-				m_device->seek(pos + sizeof(qsizetype) + full_size);
+				// A content record is its size, its payload, then its size again, which
+				// is how doContent skips one. Counting a single size left the reader one
+				// integer short of the next record.
+				m_device->seek(pos + (qint64)sizeof(qsizetype) * 2 + full_size);
 			}
 		}
 	}

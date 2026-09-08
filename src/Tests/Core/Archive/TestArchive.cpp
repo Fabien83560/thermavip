@@ -277,6 +277,61 @@ private Q_SLOTS:
 
 		QVERIFY2(in.hasError(), "a truncated record must be reported");
 	}
+
+	/// A map round trips through a binary archive.
+	///
+	/// This passes on the code as it was: a map is handled by the serialisation
+	/// dispatcher before it reaches the fallback that used to write into a local
+	/// buffer and drop it. The test pins the behaviour that matters to a reader; it
+	/// does not reach that fallback, which is only used where no serialisation
+	/// function is registered for the type.
+	void binaryRoundTripVariantMap()
+	{
+		QVariantMap source;
+		source["number"] = 42;
+		source["text"] = QString("hello");
+		source["real"] = 3.5;
+
+		QByteArray buffer;
+		{
+			VipBinaryArchive out(&buffer, QIODevice::WriteOnly);
+			QVERIFY(out.content("map", source));
+		}
+
+		VipBinaryArchive in(buffer);
+		QVariantMap read;
+		QVERIFY(in.content("map", read));
+
+		QCOMPARE(read.size(), source.size());
+		QCOMPARE(read["number"].toInt(), 42);
+		QCOMPARE(read["text"].toString(), QString("hello"));
+		QCOMPARE(read["real"].toDouble(), 3.5);
+	}
+
+	/// Nested nodes read back in order through a binary archive. Closing a node
+	/// walked past a start tag by seven bytes, which left every following read out
+	/// of alignment.
+	void binaryNestedNodesAreWalkedCorrectly()
+	{
+		QByteArray buffer;
+		{
+			VipBinaryArchive out(&buffer, QIODevice::WriteOnly);
+			QVERIFY(out.start("root"));
+			QVERIFY(out.start("child"));
+			QVERIFY(out.content("inner", 7));
+			QVERIFY(out.end());
+			QVERIFY(out.content("after", 9));
+			QVERIFY(out.end());
+		}
+
+		VipBinaryArchive in(buffer);
+		int after = 0;
+		QVERIFY2(in.start("root"), "start root");
+		QVERIFY2(in.start("child"), "start child");
+		QVERIFY2(in.end(), qPrintable("closing a node without reading it: " + in.errorString()));
+		QVERIFY2(in.content("after", after), qPrintable("read after: " + in.errorString()));
+		QCOMPARE(after, 9);
+	}
 };
 
 VIP_TEST_MAIN(TestArchive)
