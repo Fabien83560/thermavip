@@ -7,6 +7,7 @@
 
 #include "vip_test_main.h"
 
+#include "VipIterator.h"
 #include "VipNDArray.h"
 #include "VipLongDouble.h"
 #include "VipVectors.h"
@@ -212,6 +213,40 @@ private Q_SLOTS:
 		vipReadLEDouble(savedAsLongDouble | 10u, in);
 
 		QVERIFY(in.status() != QDataStream::Ok);
+	}
+
+	/// The size of an array is the product of its dimensions, computed in a signed
+	/// integer. Four dimensions of 65536 reach 2^64: the product used to wrap, which
+	/// is undefined behaviour and yielded a small or negative size that was then
+	/// used to walk the array and to size allocations. Each dimension here is
+	/// plausible on its own, which is what tells this apart from a bad dimension.
+	void shapeSizeOverflowIsReported()
+	{
+		VipNDArrayShape shape = vipVector(65536, 65536, 65536, 65536);
+
+		QCOMPARE(vipShapeToSize(shape), (qsizetype)-1);
+	}
+
+	/// A negative dimension is refused rather than multiplied.
+	void negativeDimensionIsReported()
+	{
+		QCOMPARE(vipShapeToSize(vipVector(4, -1)), (qsizetype)-1);
+	}
+
+	/// A shape that fits still gives its size.
+	void shapeSizeIsComputed()
+	{
+		QCOMPARE(vipShapeToSize(vipVector(3, 5, 7)), (qsizetype)105);
+	}
+
+	/// The stride computation multiplies the same dimensions and must report the
+	/// same overflow.
+	void defaultStridesReportOverflow()
+	{
+		VipNDArrayShape shape = vipVector(65536, 65536, 65536, 65536);
+		VipNDArrayShape strides;
+
+		QCOMPARE((vipComputeDefaultStrides<Vip::FirstMajor>(shape, strides)), (qsizetype)-1);
 	}
 };
 
