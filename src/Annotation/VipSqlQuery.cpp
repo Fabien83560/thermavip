@@ -144,6 +144,12 @@ struct DB
 	QString sqlite_file;
 	QString local_movie_folder;
 	QString local_movie_suffix;
+	// Transport security. Read from the same file as the rest, empty by default so
+	// that an existing deployment keeps working; a site that wants TLS sets
+	// MYSQL_SSL_MODE, and MYSQL_SSL_CA when it also wants the server identity
+	// checked against its own authority.
+	QString ssl_mode;
+	QString ssl_ca;
 };
 
 static QString removeQuote(const QString& line)
@@ -208,6 +214,8 @@ const DB& readDB()
 				db.sqlite_file = removeQuote(settings.value("SQLITE_DATABASE_FILE").toString());
 				db.local_movie_folder = removeQuote(settings.value("LOCAL_MOVIE_FOLDER").toString());
 				db.local_movie_suffix = removeQuote(settings.value("LOCAL_MOVIE_SUFFIX").toString());
+				db.ssl_mode = removeQuote(settings.value("MYSQL_SSL_MODE").toString());
+				db.ssl_ca = removeQuote(settings.value("MYSQL_SSL_CA").toString());
 				db.local_movie_folder.replace("\\", "/");
 				if (db.local_movie_folder.endsWith("/"))
 					db.local_movie_folder = db.local_movie_folder.mid(0, db.local_movie_folder.size() - 1);
@@ -281,7 +289,16 @@ static QSqlDatabase createConnection(const DB & param, bool reset = false)
 		//QSqlDatabase::removeDatabase("in_mem_db");
 
 		//db = QSqlDatabase::addDatabase("QMYSQL", "mysql_database");
-		db.setConnectOptions("MYSQL_OPT_CONNECT_TIMEOUT=36000;MYSQL_OPT_READ_TIMEOUT=100;MYSQL_OPT_WRITE_TIMEOUT=100;");
+		QString opts = "MYSQL_OPT_CONNECT_TIMEOUT=36000;MYSQL_OPT_READ_TIMEOUT=100;MYSQL_OPT_WRITE_TIMEOUT=100;";
+		// Nothing in the project asked for TLS, so credentials and query results
+		// crossed the network in the clear whatever the server supported.
+		if (!param.ssl_mode.isEmpty())
+			opts += "MYSQL_OPT_SSL_MODE=" + param.ssl_mode + ";";
+		if (!param.ssl_ca.isEmpty())
+			opts += "MYSQL_OPT_SSL_CA=" + param.ssl_ca + ";";
+		else if (param.ssl_mode.isEmpty())
+			VIP_LOG_WARNING("Database connection without transport security: set MYSQL_SSL_MODE to enable it");
+		db.setConnectOptions(opts);
 		//db.setConnectOptions("MYSQL_OPT_READ_TIMEOUT=100");
 		//db.setConnectOptions("MYSQL_OPT_WRITE_TIMEOUT=100");
 		//db.setConnectOptions("MYSQL_OPT_RECONNECT=1");
