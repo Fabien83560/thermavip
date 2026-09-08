@@ -4856,7 +4856,16 @@ void VipMainWindow::quickSave()
 }
 void VipMainWindow::quickLoad()
 {
-	loadSession(vipGetDataDirectory() + "auto_session.session");
+	const QString file = vipGetDataDirectory() + "auto_session.session";
+	// A single key replaced the whole workspace from a fixed, unprotected path, with
+	// no confirmation and no way back: everything unsaved was lost, and the file
+	// restores plugins, settings and, with Python built in, code.
+	if (displayArea() && displayArea()->count() > 0) {
+		if (vipQuestion("Load session", "Replace the current workspace with the quick session?\n" + file) != QMessageBox::Yes)
+			return;
+	}
+	VIP_LOG_INFO("Loading quick session: " + file);
+	loadSession(file);
 }
 
 void VipMainWindow::closeEvent(QCloseEvent* evt)
@@ -6068,8 +6077,22 @@ VipBaseDragWidget* vipLoadBaseDragWidget(VipArchive& arch, VipDisplayPlayerArea*
 	arch.start("Processings");
 	qint64 time = arch.read("time").toLongLong();
 	QList<VipProcessingObject*> objects;
+	// The two other read loops in this file stop when the read yields nothing. This
+	// one only watched the error flag, so a variant that is neither a processing nor
+	// an error left the body doing nothing and the loop running for ever. Nothing
+	// bounded the number of objects either, and each one is a device opened for
+	// reading before anything has looked at it.
+	constexpr int maxRestoredProcessings = 4096;
 	while (!arch.hasError()) {
-		if (VipProcessingObject* obj = arch.read().value<VipProcessingObject*>()) {
+		const QVariant v = arch.read();
+		if (!v.isValid() || arch.hasError())
+			break;
+		if (VipProcessingObject* obj = v.value<VipProcessingObject*>()) {
+			if (objects.size() >= maxRestoredProcessings) {
+				VIP_LOG_ERROR("Too many processings in session file, stopping at " + QString::number(objects.size()));
+				delete obj;
+				break;
+			}
 			// open the read only devices
 			if (VipIODevice* device = qobject_cast<VipIODevice*>(obj)) {
 				if (device->supportedModes() & VipIODevice::ReadOnly)

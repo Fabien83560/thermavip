@@ -7,6 +7,9 @@
 
 #include "vip_test_main.h"
 
+#include <QDir>
+#include <type_traits>
+
 #include "VipIterator.h"
 #include "VipNDArray.h"
 #include "VipLongDouble.h"
@@ -247,6 +250,26 @@ private Q_SLOTS:
 		VipNDArrayShape strides;
 
 		QCOMPARE((vipComputeDefaultStrides<Vip::FirstMajor>(shape, strides)), (qsizetype)-1);
+	}
+
+	/// Reading an array from a file is a conversion no longer: with a default second
+	/// argument these constructors converted, so any function taking a const
+	/// VipNDArray& accepted a string literal and read the file it named, without a
+	/// conversion appearing at the call site.
+	void arrayIsNotConstructibleFromAStringImplicitly()
+	{
+		QVERIFY(!(std::is_convertible<const char*, VipNDArray>::value));
+		QVERIFY(!(std::is_convertible<QIODevice*, VipNDArray>::value));
+		QVERIFY((std::is_constructible<VipNDArray, const char*>::value));
+	}
+
+	/// A file that cannot be read leaves a null array rather than a half built one.
+	void arrayFromMissingFileIsNull()
+	{
+		const QByteArray path = (QDir::tempPath() + QStringLiteral("/vip_no_such_file.bin")).toLatin1();
+		const VipNDArray array(path.constData());
+
+		QVERIFY(array.isNull());
 	}
 };
 
