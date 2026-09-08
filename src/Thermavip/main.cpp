@@ -529,13 +529,15 @@ int main(int argc, char** argv)
 	{
 		if (!VipUpdate::getUpdateProgram().isEmpty()) {
 			VipUpdate update;
-			update.renameNewFiles("./"); // QFileInfo(vipAppCanonicalPath()).canonicalPath());
+			// The installation directory, not the one the process was started from.
+			const QString install = QFileInfo(vipAppCanonicalPath()).canonicalPath();
+			update.renameNewFiles(install);
 
 			// check for updates
 			if (!no_splashscreen)
 				splash->showMessage("Check for new updates...", Qt::AlignBottom | Qt::AlignHCenter, Qt::white);
 
-			if (update.hasUpdate("./")) // QFileInfo(vipAppCanonicalPath()).canonicalPath()) > 0)
+			if (update.hasUpdate(install))
 			{
 				if (update.isDownloadFinished()) {
 					if (!no_splashscreen)
@@ -546,8 +548,7 @@ int main(int argc, char** argv)
 						// QProcess::startDetached(VipUpdate::getUpdateProgram() + " -u --command " + procname + " -o ./");
 						QProcess::startDetached(VipUpdate::getUpdateProgram(),
 									QStringList() << "-u"
-										      << "--command" << procname << "-o"
-										      << "./");
+										      << "--command" << procname << "-o" << install);
 						return 0;
 					}
 				}

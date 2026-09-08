@@ -3316,12 +3316,14 @@ public:
 		while (VipMainWindow* w = mainWindow) {
 
 			bool downloaded = false;
-			if (update->process()->state() != QProcess::Running && update->hasUpdate("./", &downloaded) > 0) // QFileInfo(vipAppCanonicalPath()).canonicalPath(),&downloaded) > 0)
+			// The installation directory, not the one the process was started from.
+			const QString install = QFileInfo(vipAppCanonicalPath()).canonicalPath();
+			if (update->process()->state() != QProcess::Running && update->hasUpdate(install, &downloaded) > 0)
 			{
 				if (!downloaded) {
 					QMetaObject::invokeMethod(w->iconBar()->updateIconAction, "setVisible", Qt::QueuedConnection, Q_ARG(bool, false));
 					QMetaObject::invokeMethod(w->iconBar()->update, "setVisible", Qt::QueuedConnection, Q_ARG(bool, true));
-					update->startDownload("./"); // QFileInfo(vipAppCanonicalPath()).canonicalPath());
+					update->startDownload(install);
 				}
 				else
 					QMetaObject::invokeMethod(w->iconBar()->updateIconAction, "setVisible", Qt::QueuedConnection, Q_ARG(bool, true));
