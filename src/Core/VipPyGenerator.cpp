@@ -29,6 +29,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "VipProgress.h"
 #include "VipPyGenerator.h"
 #include "VipPyProcessing.h"
 
@@ -138,15 +139,41 @@ bool VipPySignalGenerator::open(VipIODevice::OpenModes mode)
 		ok = false;
 		value.toDouble(&ok);
 		if (ok) {
-			// generate the curve
+			// One synchronous round trip to the interpreter per sample, on the calling
+			// thread, which is the GUI one. The count is (end - start) / sampling and
+			// nothing bounded it: an hour at the default sampling is 180000 round
+			// trips with the interface frozen throughout, and the three properties
+			// come back from session files, where they can ask for far more than that.
+			static constexpr qint64 maxGeneratedPoints = 10 * 1000 * 1000;
+			const qint64 count = (end - start) / sampling + 1;
+			if (count > maxGeneratedPoints) {
+				setError("Too many points to generate: " + QString::number(count));
+				return false;
+			}
+
+			VipProgress progress;
+			progress.setRange(0, (double)count);
+			progress.setText("Generating curve...");
+			progress.setCancelable(true);
+
 			VipPointVector vector;
-			for (qint64 time = start; time <= end; time += sampling) {
+			vector.reserve(count);
+			qint64 index = 0;
+			for (qint64 time = start; time <= end; time += sampling, ++index) {
 				bool ok = false;
 				QVariant value = computeValue(time, ok);
 				if (!ok)
 					return false;
 
 				vector.append(QPointF(time, value.toDouble()));
+
+				if ((index & 0xff) == 0) {
+					progress.setValue((double)index);
+					if (progress.canceled()) {
+						setError("Curve generation cancelled");
+						return false;
+					}
+				}
 			}
 			d_data = QVariant::fromValue(vector);
 			if (!readData(0))

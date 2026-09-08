@@ -280,8 +280,8 @@ class IPythonInterpreter(RichJupyterWidget):
         self.pushObjects({'__puller':self.puller})
         self.pushObjects({'__writer':SyncWrite(shell)})
         self.pushObjects({'__interp':self})
-        self.execInKernel("import sys;__writer.init_write = sys.stdout.write;sys.stdout.write=__writer")
-        self.execInKernel("import threading;__puller.shell_thread_id = threading.current_thread().ident")
+        self._execInternal("import sys;__writer.init_write = sys.stdout.write;sys.stdout.write=__writer")
+        self._execInternal("import threading;__puller.shell_thread_id = threading.current_thread().ident")
         global shell_thread_id
         shell_thread_id = self.puller.shell_thread_id
         
@@ -320,7 +320,7 @@ class IPythonInterpreter(RichJupyterWidget):
     
     def pull(self,name):
         self.puller.name = name
-        self.execInKernel("__puller.pull(globals()); ")
+        self._execInternal("__puller.pull(globals()); ")
         return self.puller.res
             
         
@@ -328,9 +328,18 @@ class IPythonInterpreter(RichJupyterWidget):
         """Add entry to interpreter"""
         self.execute(code)
         
-    def execInKernel(self,code):
-        """Exec code in kernel directly"""
-        self.kernel_client.execute(code,silent=True, store_history=False)
+    def _execInternal(self, code):
+        """Run one of this file's own literal strings. Silent on purpose: these are
+        plumbing, and showing them would be noise."""
+        self.kernel_client.execute(code, silent=True, store_history=False)
+
+    def execInKernel(self, code):
+        """Run code that did not come from this console.
+
+        It used to run silently and outside the history, so anything reaching this
+        method through the shared memory channel executed with no trace at all.
+        The user sees it and it is recorded."""
+        self.kernel_client.execute(code, silent=False, store_history=True)
         
     def pushObjects(self,objects):
         """Add objects to the kernel. Must be a dict."""
@@ -373,7 +382,7 @@ class IPythonInterpreter(RichJupyterWidget):
         self.pushObjects({'__puller':self.puller})
         self.pushObjects({'__writer':SyncWrite(shell)})
         self.pushObjects({'__interp':self})
-        self.execInKernel("import sys;__writer.init_write = sys.stdout.write;sys.stdout.write=__writer")
+        self._execInternal("import sys;__writer.init_write = sys.stdout.write;sys.stdout.write=__writer")
         
         
     def stopCode(self):
