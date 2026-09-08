@@ -435,6 +435,41 @@ private Q_SLOTS:
 		QVERIFY2(in.hasError(), "an out of range count must be reported, not consumed");
 	}
 
+	/// Extracting an attribute as a number must accept a number and nothing
+	/// else. The conversion used to accept any string starting with digits and
+	/// silently drop the rest, so "12abc" became 12 and "1,5" became 1, both
+	/// reported as valid measurements. Non finite values must be refused for the
+	/// same reason: they travel downstream as if they had been measured.
+	void attributeToDoubleRejectsPartialNumbers()
+	{
+		struct Case
+		{
+			const char* text;
+			bool accepted;
+			double value;
+		};
+		const Case cases[] = { { "12", true, 12.0 },	 { " 3.5 ", true, 3.5 },  { "-2.25", true, -2.25 }, { "1e3", true, 1000.0 },
+				       { "12abc", false, 0.0 },	 { "1,5", false, 0.0 },	  { "abc", false, 0.0 },    { "", false, 0.0 },
+				       { "nan", false, 0.0 },	 { "inf", false, 0.0 },	  { "1e999", false, 0.0 },  { "0x10", false, 0.0 } };
+
+		for (const Case& c : cases) {
+			VipExtractAttribute proc;
+			proc.setScheduleStrategy(VipProcessingObject::Asynchronous, false);
+			proc.propertyAt(0)->setData(QString("measure"));
+			proc.propertyAt(1)->setData(true);
+
+			VipAnyData in(QVariant(0), 0);
+			in.setAttribute("measure", QString::fromLatin1(c.text));
+			proc.inputAt(0)->setData(in);
+			proc.update();
+
+			const bool accepted = !proc.hasError();
+			QVERIFY2(accepted == c.accepted, qPrintable(QStringLiteral("'%1': expected %2, got %3").arg(c.text).arg(c.accepted).arg(accepted)));
+			if (c.accepted)
+				QCOMPARE(proc.outputAt(0)->data().value<double>(), c.value);
+		}
+	}
+
 	// -- VipProcessingList ---------------------------------------------------
 
 	/// An empty list short circuits and forwards its input to its output.

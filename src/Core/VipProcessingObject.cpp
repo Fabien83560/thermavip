@@ -45,6 +45,7 @@
 #include "VipIODevice.h"
 #include "VipLogging.h"
 #include "VipProcessingObject.h"
+#include <cmath>
 #include "VipSleep.h"
 #include "VipTextOutput.h"
 #include "VipUniqueId.h"
@@ -4586,21 +4587,26 @@ void VipExtractAttribute::apply()
 
 double VipExtractAttribute::ToDouble(const QVariant& var, bool* ok)
 {
+	// The whole string has to be a number, not merely start with one. The text
+	// stream this used to rely on consumes the longest numeric prefix and still
+	// reports success, so "12abc" produced 12 and "1,5" produced 1, both flagged
+	// valid and sent downstream as measurements. Non finite values are refused
+	// for the same reason.
 	bool work = false;
-	double res = var.toDouble(&work);
-	if (work) {
+	const double res = var.toDouble(&work);
+	if (work && std::isfinite(res)) {
 		if (ok)
-			*ok = work;
+			*ok = true;
 		return res;
 	}
-	else {
-		QString str = var.toString();
-		QTextStream stream(&str, QIODevice::ReadOnly);
-		if ((stream >> res).status() == QTextStream::Ok) {
-			if (ok)
-				*ok = true;
-			return res;
-		}
+
+	// Surrounding whitespace stays tolerated, nothing else.
+	bool converted = false;
+	const double parsed = var.toString().trimmed().toDouble(&converted);
+	if (converted && std::isfinite(parsed)) {
+		if (ok)
+			*ok = true;
+		return parsed;
 	}
 
 	if (ok)
