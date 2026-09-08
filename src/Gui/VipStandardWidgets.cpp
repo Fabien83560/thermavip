@@ -160,8 +160,13 @@ QWidget* VipStandardWidgets::fromStyleSheet(const QString& style_sheet)
 	// take care of '--' for widget inside namespace
 	class_name.replace("--", "::");
 	QWidget* widget = vipCreateVariant(class_name.toLatin1().data()).value<QWidget*>();
+	// A selector naming a class the metatype system does not know — a missing
+	// plugin, a session from a newer version — yields nullptr, and this call was
+	// made before the test that follows it.
+	if (!widget)
+		return nullptr;
 	widget->setStyle(QApplication::style());
-	if (widget) {
+	{
 
 		// apply the style sheet and make sur it is applied to the widget
 		widget->setStyleSheet(style_sheet);

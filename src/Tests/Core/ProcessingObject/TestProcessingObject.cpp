@@ -9,6 +9,7 @@
 #include "vip_test_main.h"
 
 #include "VipProcessingObject.h"
+#include "VipImageProcessing.h"
 #include "VipStandardProcessing.h"
 #include "VipXmlArchive.h"
 
@@ -468,6 +469,39 @@ private Q_SLOTS:
 			if (c.accepted)
 				QCOMPARE(proc.outputAt(0)->data().value<double>(), c.value);
 		}
+	}
+
+	// -- Image transform list ------------------------------------------------
+
+	/// A transform list must survive a session round trip. It does not.
+	///
+	/// EXPECTED FAILURE. Saving two transforms writes 48 bytes — the size as a
+	/// qsizetype plus twenty bytes per transform — and loading them back returns
+	/// success with an empty list. The stream operators the file declares are
+	/// static, so the metatype system does not use them: what runs is the generic
+	/// container streaming, and the two halves do not agree. An image transform
+	/// list stored in a session is therefore lost on reload, without a message.
+	/// This test states the EXPECTED behaviour and must stay red until the format
+	/// is made symmetric.
+	void transformListRoundTrip()
+	{
+		TransformList source;
+		source.push_back(Transform(Transform::Rotate, 90, 0));
+		source.push_back(Transform(Transform::Scale, 2, 3));
+
+		QByteArray buffer;
+		{
+			QDataStream out(&buffer, QIODevice::WriteOnly);
+			QVERIFY(QMetaType(qMetaTypeId<TransformList>()).save(out, &source));
+		}
+		QCOMPARE(buffer.size(), 48);
+
+		TransformList read;
+		QDataStream in(buffer);
+		QVERIFY(QMetaType(qMetaTypeId<TransformList>()).load(in, &read));
+
+		QEXPECT_FAIL("", "the declared stream operators are static, the metatype system uses the generic ones", Continue);
+		QCOMPARE(read.size(), source.size());
 	}
 
 	// -- VipProcessingList ---------------------------------------------------

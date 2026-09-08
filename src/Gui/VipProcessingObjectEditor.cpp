@@ -3361,7 +3361,15 @@ public:
 			parent->setItemWidget(this, w);
 		}
 
-		QList<QLabel*> labels = parent->itemWidget(this)->findChildren<QLabel*>();
+		// The four branches above cover the enumeration as it stands, but the type
+		// comes from a session file: an unknown one left no item widget and no x.
+		QWidget* item = parent->itemWidget(this);
+		if (!item || !x) {
+			setHidden(true);
+			return;
+		}
+
+		QList<QLabel*> labels = item->findChildren<QLabel*>();
 		for (int i = 0; i < labels.size(); ++i)
 			labels[i]->setAttribute(Qt::WA_TransparentForMouseEvents, true);
 
