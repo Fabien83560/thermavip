@@ -8,6 +8,7 @@
 #include "vip_test_main.h"
 
 #include "VipNDArray.h"
+#include "VipVectors.h"
 
 class TestSerialization : public QObject
 {
@@ -92,6 +93,83 @@ private Q_SLOTS:
 		in >> read;
 
 		QVERIFY2(in.status() != QDataStream::Ok, "a truncated stream must be reported");
+	}
+
+	/// A sample vector round trips through a data stream unchanged.
+	void sampleVectorRoundTrip()
+	{
+		VipPointVector source;
+		source.push_back(VipPoint(1.0, 2.0));
+		source.push_back(VipPoint(3.0, 4.0));
+
+		QByteArray buffer;
+		{
+			QDataStream out(&buffer, QIODevice::WriteOnly);
+			out << source;
+		}
+
+		VipPointVector read;
+		QDataStream in(buffer);
+		in >> read;
+
+		QCOMPARE(in.status(), QDataStream::Ok);
+		QCOMPARE(read.size(), source.size());
+		QCOMPARE(read[1].x(), 3.0);
+	}
+
+	/// The element count was reserved before a single element had been read, so a
+	/// crafted stream asked for an arbitrary allocation up front. A count larger
+	/// than the bytes left in the stream cannot be honoured and must be refused.
+	void sampleVectorWithImplausibleCountIsRejected()
+	{
+		QByteArray buffer;
+		{
+			QDataStream out(&buffer, QIODevice::WriteOnly);
+			out << static_cast<qint64>(200000000); // ~3 GB of points announced
+			out << 1.0 << 2.0;
+		}
+
+		VipPointVector read;
+		QDataStream in(buffer);
+		in >> read;
+
+		QVERIFY2(in.status() != QDataStream::Ok, "a count the stream cannot back must be refused");
+		QVERIFY(read.isEmpty());
+	}
+
+	/// Same guard on the negative side: the count is signed and comes from the file.
+	void sampleVectorWithNegativeCountIsRejected()
+	{
+		QByteArray buffer;
+		{
+			QDataStream out(&buffer, QIODevice::WriteOnly);
+			out << static_cast<qint64>(-1);
+		}
+
+		VipPointVector read;
+		QDataStream in(buffer);
+		in >> read;
+
+		QVERIFY(in.status() != QDataStream::Ok);
+		QVERIFY(read.isEmpty());
+	}
+
+	/// A truncated stream must stop the read rather than fill the container.
+	void truncatedSampleVectorStopsReading()
+	{
+		QByteArray buffer;
+		{
+			QDataStream out(&buffer, QIODevice::WriteOnly);
+			out << static_cast<qint64>(3);
+			out << 1.0 << 2.0; // one point only, two are missing
+		}
+
+		VipPointVector read;
+		QDataStream in(buffer);
+		in >> read;
+
+		QVERIFY(in.status() != QDataStream::Ok);
+		QVERIFY(read.isEmpty());
 	}
 };
 
