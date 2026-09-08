@@ -39,6 +39,8 @@
 
 #include <QSqlDatabase>
 
+#include <functional>
+
 /// @brief Maximum number of points to describe a polygon in the database
 #define VIP_DB_MAX_FRAME_POLYGON_POINTS 32
 
@@ -155,6 +157,16 @@ typedef QMap<qint64, VipShapeList> Vip_event_list;
 VIP_ANNOTATION_EXPORT Vip_event_list vipCopyEvents(const Vip_event_list& events);
 
 /// @brief Remove event from DB based on their ids in the 'thermal_events' table
+/// @brief Run several database operations as one unit.
+///
+/// Returns what @a fn returned, after committing. A false return, or a failed
+/// commit, rolls everything back. If the driver has no transaction support the
+/// call still runs @a fn, so the caller must order its operations so that a
+/// partial result is repairable; vipDBHasTransactions() says which case applies.
+VIP_ANNOTATION_EXPORT bool vipDBTransaction(const std::function<bool()>& fn);
+/// @brief Whether the current connection can group operations.
+VIP_ANNOTATION_EXPORT bool vipDBHasTransactions();
+
 VIP_ANNOTATION_EXPORT bool vipRemoveFromDB(const QList<qint64>& ids, VipProgress* p = nullptr);
 
 /// @brief Set new value to given column for selected events only

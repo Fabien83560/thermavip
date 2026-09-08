@@ -1959,27 +1959,50 @@ void VipPlayerDBAccess::uploadInternal(bool show_messages)
 				}
 			}
 
-			p.setText("Remove modified events from DB...");
+			// The delete ran first and outside any transaction, so a single failed
+			// insert destroyed the original rows for good, in a database the whole
+			// team shares and with no local copy to fall back on. Both halves now
+			// succeed or neither does; without transaction support the insert goes
+			// first, which leaves a repairable duplicate rather than a hole.
+			const bool grouped = vipDBHasTransactions();
+			if (!grouped)
+				VIP_LOG_WARNING("Database without transaction support: events are inserted before the old ones are removed");
 
-			// remove from db
-			if (to_remove_from_DB.size() && !vipRemoveFromDB(to_remove_from_DB)) {
+			QString failure;
+			const auto send = [&]() {
+				p.setText("Send events to DB...");
+				if (to_send.size() && vipSendToDB(PPO, camera, device, pulse, to_send).size() == 0) {
+					failure = "Failed to upload events!";
+					return false;
+				}
+				return true;
+			};
+			const bool uploaded = vipDBTransaction([&]() {
+				if (!grouped && !send())
+					return false;
+
+				p.setText("Remove modified events from DB...");
+				if (to_remove_from_DB.size() && !vipRemoveFromDB(to_remove_from_DB)) {
+					failure = "Unable to remove events from DB";
+					return false;
+				}
+
+				return grouped ? send() : true;
+			});
+
+			if (!uploaded) {
+				if (failure.isEmpty())
+					failure = "Could not commit the events to the database";
 				if (show_messages)
-					vipWarning("Warning", "Unable to remove events from DB");
-				VIP_LOG_WARNING("Unable to remove events from DB");
+					vipWarning("Warning", failure);
+				VIP_LOG_WARNING(failure);
 				return;
 			}
+
 			if (to_remove_from_DB.size() > 1)
 				VIP_LOG_INFO(to_remove_from_DB.size(), " events removed from DB");
 			else if (to_remove_from_DB.size() == 1)
 				VIP_LOG_INFO(to_remove_from_DB.size(), " event removed from DB");
-
-			p.setText("Send events to DB...");
-			if (to_send.size() && vipSendToDB(PPO, camera, device, pulse, to_send).size() == 0) {
-				if (show_messages)
-					vipWarning("Warning", "Failed to upload events!");
-				VIP_LOG_WARNING("Failed to upload events!");
-				return;
-			}
 
 			if (to_send.size() > 1)
 				VIP_LOG_INFO(to_send.size(), " events sent to DB");

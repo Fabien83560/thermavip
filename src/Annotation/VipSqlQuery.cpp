@@ -38,6 +38,7 @@
 
 #include <qsettings.h>
 #include <qsqldatabase.h>
+#include <qsqldriver.h>
 #include <qsqlerror.h>
 #include <qsqlquery.h>
 #include <QStandardPaths>
@@ -862,6 +863,38 @@ QList<qint64> vipSendToDB(const QString& userName, const QString& camera, const 
 }
 
 
+
+bool vipDBHasTransactions()
+{
+	QSqlDatabase db = createConnection();
+	return db.isOpen() && db.driver() && db.driver()->hasFeature(QSqlDriver::Transactions);
+}
+
+bool vipDBTransaction(const std::function<bool()>& fn)
+{
+	// Every entry point here goes through the same global connection, so a
+	// transaction opened on it covers the queries the callee runs.
+	QSqlDatabase db = createConnection();
+	if (!db.isOpen())
+		return false;
+	if (!vipDBHasTransactions())
+		return fn();
+
+	if (!db.transaction()) {
+		VIP_LOG_ERROR("Cannot start a database transaction: " + db.lastError().text());
+		return fn();
+	}
+	if (!fn()) {
+		db.rollback();
+		return false;
+	}
+	if (!db.commit()) {
+		VIP_LOG_ERROR("Cannot commit to the database: " + db.lastError().text());
+		db.rollback();
+		return false;
+	}
+	return true;
+}
 
 bool vipRemoveFromDB(const QList<qint64>& ids, VipProgress* p)
 {
