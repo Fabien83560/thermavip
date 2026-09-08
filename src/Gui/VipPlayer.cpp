@@ -8045,7 +8045,9 @@ static void extractPixelsCoordinates(VipPlotShape* shape, VipVideoPlayer* pl)
 	const VipNDArray ar = pl->spectrogram()->rawData().extract(pl->spectrogram()->rawData().boundingRect(), &bound);
 	const QVector<QPoint> pixels = tmp; // sh.clip(tmp, QRect(bound.toRect().topLeft(), QSize(ar.shape(1), ar.shape(0))));
 
-	QString filename = VipFileDialog::getOpenFileName(nullptr, "Save pixels coordinates", "TEXT file (*.txt)");
+	// An open dialog was used to pick a file that is then truncated: it lists the
+	// existing files and warns about nothing.
+	QString filename = VipFileDialog::getSaveFileName(nullptr, "Save pixels coordinates", "TEXT file (*.txt)");
 	if (!filename.isEmpty()) {
 		QFile out(filename);
 		if (out.open(QFile::WriteOnly)) {
