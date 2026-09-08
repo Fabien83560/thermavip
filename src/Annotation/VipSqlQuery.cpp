@@ -325,6 +325,29 @@ bool vipCreateSQLConnection(const QString& hostname, int port, const QString& db
 	return createConnection(db,true).isOpen();
 }
 
+// Same as below, with bound values. Free-text criteria must never be pasted
+// into the statement: a single apostrophe used to break the query, and a
+// crafted one could append a UNION.
+static QSqlQuery execQuery(QSqlDatabase& db, const QString& query, const QVariantList& binds, int trial = 0)
+{
+	QSqlQuery q(db);
+	q.prepare(query);
+	for (const QVariant& v : binds)
+		q.addBindValue(v);
+	q.exec();
+
+	if (q.lastError().isValid()) {
+		if (trial == 0) {
+			reconnectDB(true);
+			return execQuery(db, query, binds, ++trial);
+		}
+		VIP_LOG_ERROR(q.lastError().nativeErrorCode());
+		VIP_LOG_ERROR(q.lastError().databaseText());
+		VIP_LOG_ERROR(q.lastError().text());
+	}
+	return q;
+}
+
 static QSqlQuery execQuery( QSqlDatabase& db, const QString& query, int trial = 0)
 {
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
@@ -694,31 +717,32 @@ QList<qint64> vipSendToDB(const QString& userName, const QString& camera, const 
 		it.value().first().setAttribute("max_temperature_C", max_t);
 
 		// send to thermal_events
-		QString query = QString("INSERT IGNORE INTO `thermal_events` (`experiment_id`,`line_of_sight`,`device`,`initial_timestamp_ns`,`final_timestamp_ns`,"
-					"`duration_ns`,`category`,`is_automatic_detection`,`max_temperature_C`,`max_T_timestamp_ns`,`method`,`confidence`,"
-					"`user`,`comments`,`dataset`,`name`,  `analysis_status`) \n"
-					"VALUES\n"
-					"('%1','%2','%3',%4,%5,%6,'%7',%8,%9,%10,'%11',%12,'%13','%14','%15','%16','%17');")
-				  .arg(QString::number(pulse))
-				  .arg(camera)
-				  .arg(device)
-				  .arg(min)
-				  .arg(max)
-				  .arg(max - min)
-				  .arg(thermal_event)
-				  .arg(is_automatic_detection)
-				  .arg(max_t)
-				  .arg(max_T_timestamp_ns)
-				  .arg(method)
-				  .arg(confidence)
-				  .arg(userName)
-				  .arg(comment)
-				  .arg(dataset)
-				  .arg(name)
-				  .arg(analysis_status);
-
+		// Bound values, not interpolation: comments, name, dataset and the other
+		// free-text columns come from the user interface, and an apostrophe alone
+		// used to break the statement.
 		QSqlQuery q(db);
-		bool res = q.exec(query);
+		q.prepare(QStringLiteral("INSERT IGNORE INTO `thermal_events` (`experiment_id`,`line_of_sight`,`device`,`initial_timestamp_ns`,`final_timestamp_ns`,"
+					 "`duration_ns`,`category`,`is_automatic_detection`,`max_temperature_C`,`max_T_timestamp_ns`,`method`,`confidence`,"
+					 "`user`,`comments`,`dataset`,`name`,`analysis_status`) "
+					 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
+		q.addBindValue(pulse);
+		q.addBindValue(camera);
+		q.addBindValue(device);
+		q.addBindValue(min);
+		q.addBindValue(max);
+		q.addBindValue(max - min);
+		q.addBindValue(thermal_event);
+		q.addBindValue(is_automatic_detection);
+		q.addBindValue(max_t);
+		q.addBindValue(max_T_timestamp_ns);
+		q.addBindValue(method);
+		q.addBindValue(confidence);
+		q.addBindValue(userName);
+		q.addBindValue(comment);
+		q.addBindValue(dataset);
+		q.addBindValue(name);
+		q.addBindValue(analysis_status);
+		bool res = q.exec();
 
 		// vip_debug("'%s'\n",q.lastError().text().toLatin1().data());
 		// vip_debug("'%s'\n", db.lastError().text().toLatin1().data());
@@ -742,8 +766,10 @@ QList<qint64> vipSendToDB(const QString& userName, const QString& camera, const 
 			VipShape(sh[i]).setAttribute("id", id);
 		}
 
+		// Numeric fields and a machine-built polygon string only: no free text
+		// reaches this batched statement.
 		// send to thermal_events_instances
-		query = QString("INSERT IGNORE INTO `thermal_events_instances` "
+		QString query = QString("INSERT IGNORE INTO `thermal_events_instances` "
 				"(`timestamp_ns`,`thermal_event_id`,`bbox_x`,`bbox_y`,`bbox_width`,`bbox_height`,"
 				"`max_temperature_C`,`max_T_image_position_x`,`max_T_image_position_y`,`min_temperature_C`,`min_T_image_position_x`,`min_T_image_position_y`,`average_temperature_C`,"
 				"`pixel_area`,`centroid_image_position_x`,`centroid_image_position_y`,`polygon`,`pfc_id`,`overheating_factor`,`max_T_world_position_x_m`,`max_T_world_position_y_m`,"
@@ -872,6 +898,24 @@ bool vipRemoveFromDB(const QList<qint64>& ids, VipProgress* p)
 
 bool vipChangeColumnInfoDB(const QList<qint64>& ids, const QString& column, const QString& value, VipProgress* p)
 {
+	// A column name cannot be bound, so it is checked against the columns the
+	// editor is allowed to change rather than concatenated as received.
+	static const QSet<QString> editableColumns = { QStringLiteral("line_of_sight"),
+						      QStringLiteral("device"),
+						      QStringLiteral("category"),
+						      QStringLiteral("is_automatic_detection"),
+						      QStringLiteral("method"),
+						      QStringLiteral("confidence"),
+						      QStringLiteral("user"),
+						      QStringLiteral("comments"),
+						      QStringLiteral("dataset"),
+						      QStringLiteral("name"),
+						      QStringLiteral("analysis_status") };
+	if (!editableColumns.contains(column)) {
+		VIP_LOG_ERROR("Refused to update an unexpected column: " + column);
+		return false;
+	}
+
 	if (p) {
 		p->setText("Change column in DB...");
 		p->setRange(0, ids.size());
@@ -884,7 +928,10 @@ bool vipChangeColumnInfoDB(const QList<qint64>& ids, const QString& column, cons
 		if (p)
 			p->setValue(i);
 		QSqlQuery q(db);
-		bool res = q.exec("UPDATE `thermal_events` SET `" + column + "` = " + value + "  WHERE `id` = " + QString::number(ids[i]));
+		q.prepare("UPDATE `thermal_events` SET `" + column + "` = ? WHERE `id` = ?");
+		q.addBindValue(value);
+		q.addBindValue(ids[i]);
+		bool res = q.exec();
 		// vip_debug("%s\n", q.lastQuery().toLatin1().data());
 		if (!res) {
 			VIP_LOG_ERROR(q.lastError().text());
@@ -910,6 +957,7 @@ VipEventQueryResults vipQueryDB(const VipEventQuery& query, VipProgress* p)
 	// first, select Ids in thermal_events table that matches cameras, pulses, comments, durations,...
 
 	QStringList conditions;
+	QVariantList binds;
 
 	if (query.eventIds.size()) {
 		// find by ids...
@@ -937,7 +985,8 @@ VipEventQueryResults vipQueryDB(const VipEventQuery& query, VipProgress* p)
 		}
 		// method condition
 		if (!query.method.isEmpty()) {
-			conditions << "(method LIKE '%" + query.method + "%')";
+			conditions << "(method LIKE ?)";
+			binds << QVariant("%" + query.method + "%");
 		}
 		// PPO names
 		if (!query.users.isEmpty()) {
@@ -957,20 +1006,23 @@ VipEventQueryResults vipQueryDB(const VipEventQuery& query, VipProgress* p)
 
 		// comment condition
 		if (!query.in_comment.isEmpty()) {
-			conditions << "(comments LIKE '%" + query.in_comment + "%')";
+			conditions << "(comments LIKE ?)";
+			binds << QVariant("%" + query.in_comment + "%");
 		}
 		// dataset condition
 		if (!query.dataset.isEmpty()) {
 			QStringList lst = query.dataset.split(" ");
 			QStringList queries;
 			for (qsizetype i = 0; i < lst.size(); ++i) {
-				queries.append("(dataset LIKE '%" + lst[i] + "%')");
+				queries.append("(dataset LIKE ?)");
+				binds << QVariant("%" + lst[i] + "%");
 			}
 			conditions << "(" + queries.join(" OR ") + ")";
 		}
 		// name condition
 		if (!query.in_name.isEmpty()) {
-			conditions << "(name LIKE '%" + query.in_name + "%')";
+			conditions << "(name LIKE ?)";
+			binds << QVariant("%" + query.in_name + "%");
 		}
 		// duration
 		if (query.min_duration >= 0) {
@@ -1016,7 +1068,7 @@ VipEventQueryResults vipQueryDB(const VipEventQuery& query, VipProgress* p)
 	//	sql += " WHERE id = " + QString::number(query.id_thermaleventinfo);
 	// }
 	// vip_debug("%s\n", sql.toLatin1().data());
-	QSqlQuery q = execQuery(db, sql);
+	QSqlQuery q = execQuery(db, sql, binds);
 	if (q.lastError().isValid()) {
 		VIP_LOG_ERROR(q.lastError().text());
 		result.error = q.lastError().text();

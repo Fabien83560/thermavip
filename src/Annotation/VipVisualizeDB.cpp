@@ -570,8 +570,6 @@ void VisualizeDB::editSelectedColumn()
 		box->addItems(vipEventTypesDB());
 		box->setCurrentText(value.toString());
 		value = edit(box, "event type");
-		if (value.userType() != 0)
-			value = QString("'" + value.toString() + "'");
 	}
 	else if (name == "is_automatic_detection") {
 		VipComboBox* box = new VipComboBox();
@@ -587,8 +585,6 @@ void VisualizeDB::editSelectedColumn()
 		ed->addItems(vipMethodsDB());
 		ed->setCurrentText(value.toString());
 		value = edit(ed, "method");
-		if (value.userType() != 0)
-			value = QString("'" + value.toString() + "'");
 	}
 	else if (name == "confidence") {
 		QDoubleSpinBox* ed = new QDoubleSpinBox();
@@ -602,22 +598,16 @@ void VisualizeDB::editSelectedColumn()
 		ed->addItems(vipUsersDB());
 		ed->setCurrentText(value.toString());
 		value = edit(ed, "User name");
-		if (value.userType() != 0)
-			value = QString("'" + value.toString() + "'");
 	}
 	else if (name == "comments") {
 		VipLineEdit* ed = new VipLineEdit();
 		ed->setText(value.toString());
 		value = edit(ed, "comments");
-		if (value.userType() != 0)
-			value = QString("'" + value.toString() + "'");
 	}
 	else if (name == "name") {
 		VipLineEdit* ed = new VipLineEdit();
 		ed->setText(value.toString());
 		value = edit(ed, "name");
-		if (value.userType() != 0)
-			value = QString("'" + value.toString() + "'");
 	}
 	else {
 		vipWarning("Warning", "This column is not editable");
