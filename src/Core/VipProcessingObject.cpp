@@ -4661,15 +4661,36 @@ VipArchive& operator<<(VipArchive& stream, const VipMultiInput& minput)
 	return stream;
 }
 
+// An element count read from a session file is untrusted input: it is used
+// directly as a loop bound and, in one case, as an index. Nothing downstream
+// bounds it, and the per-element cost is an allocation plus a registration in a
+// global list, so a crafted file exhausts memory with no message. This is a
+// plausibility cap, not a format limit: no legitimate processing declares
+// thousands of inputs.
+static constexpr int vipMaxSerializedCount = 4096;
+
+static bool vipReadCount(VipArchive& stream, const char* name, int& count)
+{
+	count = 0;
+	if (!stream.content(name, count))
+		return false;
+	if (count < 0 || count > vipMaxSerializedCount) {
+		stream.setError(QString("unexpected element count in archive: %1").arg(count));
+		count = 0;
+		return false;
+	}
+	return true;
+}
+
 VipArchive& operator>>(VipArchive& stream, VipMultiInput& minput)
 {
 	QString name;
 	int count = 0;
-	stream.content("count", count);
+	vipReadCount(stream, "count", count);
 	stream.content("multi_input_name", name);
 	minput.setName(name);
 	minput.clear();
-	for (int i = 0; i < count; ++i) {
+	for (int i = 0; i < count && stream; ++i) {
 		VipInput input;
 		stream.content(input);
 		minput.setAt(i, input);
@@ -4690,11 +4711,11 @@ VipArchive& operator>>(VipArchive& stream, VipMultiOutput& moutput)
 {
 	QString name;
 	int count = 0;
-	stream.content("count", count);
+	vipReadCount(stream, "count", count);
 	stream.content("multi_output_name", name);
 	moutput.setName(name);
 	moutput.clear();
-	for (int i = 0; i < count; ++i) {
+	for (int i = 0; i < count && stream; ++i) {
 		VipOutput output;
 		stream.content(output);
 		moutput.add(output);
@@ -4715,11 +4736,11 @@ VipArchive& operator>>(VipArchive& stream, VipMultiProperty& mproperty)
 {
 	QString name;
 	int count = 0;
-	stream.content("count", count);
+	vipReadCount(stream, "count", count);
 	stream.content("multi_property_name", name);
 	mproperty.setName(name);
 	mproperty.clear();
-	for (int i = 0; i < count; ++i) {
+	for (int i = 0; i < count && stream; ++i) {
 		VipProperty property;
 		stream.content(property);
 		mproperty.add(property);
@@ -4889,8 +4910,14 @@ VipArchive& operator<<(VipArchive& stream, const VipProcessingList* lst)
 
 VipArchive& operator>>(VipArchive& stream, VipProcessingList* lst)
 {
-	int count = stream.read("count").value<int>();
-	for (int i = 0; i < count; ++i) {
+	// Read as a 64 bit value: the writer stores a container size, so narrowing to
+	// int before the check would let a huge count wrap into a small one.
+	const qlonglong count = stream.read("count").value<qlonglong>();
+	if (count < 0 || count > vipMaxSerializedCount) {
+		stream.setError(QString("unexpected processing count in archive: %1").arg(count));
+		return stream;
+	}
+	for (qlonglong i = 0; i < count && stream; ++i) {
 		VipProcessingObject* obj = stream.read().value<VipProcessingObject*>();
 		if (obj)
 			lst->append(obj);
