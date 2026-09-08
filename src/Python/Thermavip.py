@@ -14,9 +14,33 @@ import threading
 import time as time_module
 import types
 import inspect
+import io
 import pickle
 import struct
 import numpy as np
+
+
+# A pickle names the callable it wants rebuilt, so loading one from an untrusted
+# frame runs whatever it names. The channel only ever carries arrays and plain
+# values, so refuse everything else.
+_allowed_pickle_classes = {
+    'numpy': ('ndarray', 'dtype'),
+    'numpy.core.multiarray': ('_reconstruct', 'scalar'),
+    'numpy._core.multiarray': ('_reconstruct', 'scalar'),
+    'builtins': ('bool', 'bytearray', 'bytes', 'complex', 'dict', 'float', 'frozenset',
+                 'int', 'list', 'set', 'str', 'tuple'),
+}
+
+
+class _RestrictedUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if name in _allowed_pickle_classes.get(module, ()):
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError('refusing to load %s.%s from shared memory' % (module, name))
+
+
+def _safe_loads(data):
+    return _RestrictedUnpickler(io.BytesIO(data)).load()
 
 _SharedMemory = None
 
@@ -126,11 +150,14 @@ except:
                 #self.stdout.write("good object\n");self.stdout.flush()
                 _bytes = _bytes[len(b"SH_OBJECT       "):]
                 l = struct.unpack('i',_bytes[0:4])[0]
+                # The length comes from the frame and is signed.
+                if l < 0 or l > len(_bytes) - 4:
+                    return (False,None,None)
                 #self.stdout.write("len: " + str(l) + "\n");self.stdout.flush()
                 _bytes = _bytes[4:]
                 name = _bytes[0:l]
                 #self.stdout.write("name: "+ name.decode('ascii') + "\n");self.stdout.flush()
-                obj = pickle.loads(_bytes[l:])
+                obj = _safe_loads(_bytes[l:])
                 #self.stdout.write('pickle ok: ' + str(obj) + '\n');self.stdout.flush()
                 return (True,name.decode('ascii'),obj)
             #self.stdout.write("wrong marker\n");self.stdout.flush()
@@ -524,6 +551,17 @@ except:
                     time_module.sleep(0.002)
                     continue
                     
+                # s comes from the segment and is signed: 0x7fffffff asked for a two
+                # gigabyte read out of a fifty megabyte mapping, and a negative one
+                # became a huge size_t writing into an empty buffer. The header
+                # already carries the bound the writer applies.
+                if s < 0 or s > self.header.max_msg_size:
+                    zero = b'\x00'*4
+                    ctypes.memmove(int(self.data()) + self.header.offset_read, zero, 4)
+                    ctypes.memmove(int(self.data()) + self.header.offset_read+4, zero, 4)
+                    self.unlock()
+                    raise RuntimeError('invalid message size %d in shared memory' % s)
+
                 tmp = b'\x00'*s
                 self.lock()
                 ctypes.memmove(tmp,int(self.data()) + self.header.offset_read +8,s)
@@ -591,9 +629,12 @@ except:
                 
                 _bytes = _bytes[len(b"SH_OBJECT       "):]
                 l = struct.unpack('i',_bytes[0:4])[0]
+                # The length comes from the frame and is signed.
+                if l < 0 or l > len(_bytes) - 4:
+                    return (False,None,None)
                 _bytes = _bytes[4:]
                 name = _bytes[0:l]
-                obj = pickle.loads(_bytes[l:])
+                obj = _safe_loads(_bytes[l:])
                 return (True,name.decode('ascii'),obj)
             return (False,None,None)
             
@@ -605,6 +646,9 @@ except:
             if _bytes.startswith(b"SH_SEND_OBJECT  "):
                 _bytes = _bytes[len(b"SH_SEND_OBJECT  "):]
                 l = struct.unpack('i',_bytes[0:4])[0]
+                # The length comes from the frame and is signed.
+                if l < 0 or l > len(_bytes) - 4:
+                    return (False,None)
                 _bytes = _bytes[4:]
                 name = _bytes[0:l]
                 return (True,name.decode('ascii'))
@@ -617,6 +661,9 @@ except:
             if _bytes.startswith(b"SH_ERROR_TRACE  "):
                 _bytes = _bytes[len(b"SH_ERROR_TRACE  "):]
                 l = struct.unpack('i',_bytes[0:4])[0]
+                # The length comes from the frame and is signed.
+                if l < 0 or l > len(_bytes) - 4:
+                    return (False,None)
                 _bytes = _bytes[4:]
                 err = _bytes[0:l]
                 return (True,err.decode('ascii'))
@@ -629,6 +676,9 @@ except:
             if _bytes.startswith(b"SH_EXEC_CODE    "):
                 _bytes = _bytes[len(b"SH_EXEC_CODE    "):]
                 l = struct.unpack('i',_bytes[0:4])[0]
+                # The length comes from the frame and is signed.
+                if l < 0 or l > len(_bytes) - 4:
+                    return (False,None)
                 _bytes = _bytes[4:]
                 code = _bytes[0:l]
                 return (True,code.decode('ascii'))
@@ -641,6 +691,9 @@ except:
             if _bytes.startswith(b"SH_EXEC_LINE    "):
                 _bytes = _bytes[len(b"SH_EXEC_LINE    "):]
                 l = struct.unpack('i',_bytes[0:4])[0]
+                # The length comes from the frame and is signed.
+                if l < 0 or l > len(_bytes) - 4:
+                    return (False,None)
                 _bytes = _bytes[4:]
                 code = _bytes[0:l]
                 return (True,code.decode('ascii'))
@@ -653,6 +706,9 @@ except:
             if _bytes.startswith(b"SH_EXEC_LINE_NW "):
                 _bytes = _bytes[len(b"SH_EXEC_LINE_NW "):]
                 l = struct.unpack('i',_bytes[0:4])[0]
+                # The length comes from the frame and is signed.
+                if l < 0 or l > len(_bytes) - 4:
+                    return (False,None)
                 _bytes = _bytes[4:]
                 code = _bytes[0:l]
                 return (True,code.decode('ascii'))
