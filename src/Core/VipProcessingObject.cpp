@@ -4395,7 +4395,14 @@ VipShapeList VipSceneModelBasedProcessing::shapes()
 	VipSceneModel sm = sceneModel();
 
 	// then use the shape_id property on the VipSceneModel
-	QString shape_id = this->propertyAt(1)->data().value<QString>();
+	// By name, not by position: a session file controls the size of the
+	// shape_ids multi-property, and an emptied one used to make propertyAt(1)
+	// index past the end of the flattened property vector.
+	VipProperty* ids_prop = this->propertyName("shape_ids");
+	if (!ids_prop)
+		return VipShapeList();
+
+	QString shape_id = ids_prop->data().value<QString>();
 	if (!shape_id.isEmpty()) {
 		if (sm.hasGroup(shape_id))
 			return applyTr(sm.shapes(shape_id), d_data->shapeTransform);
@@ -4404,7 +4411,7 @@ VipShapeList VipSceneModelBasedProcessing::shapes()
 	}
 
 	// get the shapes
-	QStringList ids = this->propertyAt(1)->data().value<QStringList>();
+	QStringList ids = ids_prop->data().value<QStringList>();
 	if (!ids.size())
 		return VipShapeList();
 
@@ -4736,9 +4743,14 @@ VipArchive& operator>>(VipArchive& stream, VipMultiProperty& mproperty)
 {
 	QString name;
 	int count = 0;
-	vipReadCount(stream, "count", count);
+	const bool countRead = vipReadCount(stream, "count", count);
 	stream.content("multi_property_name", name);
 	mproperty.setName(name);
+	// Clearing before the count is known let an absent or corrupt block empty
+	// the multi-property, which permanently removes the flattened properties
+	// the object was built with. Leave it untouched instead.
+	if (!countRead)
+		return stream;
 	mproperty.clear();
 	for (int i = 0; i < count && stream; ++i) {
 		VipProperty property;
