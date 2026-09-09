@@ -1,2 +1,3 @@
 add_subdirectory(Serialization)
 add_subdirectory(Resize)
+add_subdirectory(Histogram)
