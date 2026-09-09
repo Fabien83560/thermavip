@@ -2115,6 +2115,10 @@ void TaskPool::run()
 		int count = m_run.load(std::memory_order_relaxed);
 		int saved = count;
 		if (!m_stop) {
+			// Released for the whole execution. This mutex guards the counters and
+			// the condition, nothing else; holding it here made every waitForDone()
+			// wait for the processing to end instead of for the queue to empty.
+			ll.unlock();
 			while (!m_stop && count-- && !m_clear.load(std::memory_order_relaxed)) {
 				try {
 					// Avoid exiting task pool thread on unhandled exception.
@@ -2140,6 +2144,7 @@ void TaskPool::run()
 						qWarning() << "Unhandled unknown exception\n";
 				}
 			}
+			ll.lock();
 		}
 		if (VIP_UNLIKELY(m_clear.load(std::memory_order_relaxed))) {
 			m_run.store(0);
@@ -2167,9 +2172,20 @@ TaskPool::TaskPool(VipProcessingObject* parent, QThread::Priority p)
 
 TaskPool::~TaskPool()
 {
-	m_stop = true;
+	{
+		// Under the lock, so that a thread about to wait cannot miss it.
+		auto ll = lock.lock();
+		m_stop = true;
+	}
 	lock.notify_all();
-	m_thread.wait();
+
+	// The task in flight has no cancellation point, so this can only wait for it.
+	// Destroying the thread while it still runs would abort, so the bound below is
+	// a diagnostic, not a way out.
+	if (!m_thread.wait(30000)) {
+		qWarning() << "Processing thread still running after 30s, still waiting";
+		m_thread.wait();
+	}
 }
 
 void TaskPool::atomWait(UniqueLock& ll, int milli)
@@ -2180,45 +2196,26 @@ void TaskPool::atomWait(UniqueLock& ll, int milli)
 
 bool TaskPool::waitForDone(int milli_time)
 {
+	// A sleeping wait on the condition, not a poll. The loop used to spin in
+	// try_lock_for on a mutex the pool thread never released while a task ran, so
+	// the caller burnt a core, often the one of the interface. The stop flag is
+	// the abandon condition the unbounded branch was missing.
+	auto ll = lock.lock();
+
 	if (milli_time < 0) {
-		// wait until finished
-		while (this->remaining() > 0) {
-			auto ll = lock.lock();
-			lock.notify_all();
+		while (remaining() > 0 && !m_stop)
 			atomWait(ll, 15);
-		}
-		//TEST
-		/* while (this->remaining() > 0 && (!m_parent || m_parent->isEnabled())) {
-			if (!lock.try_lock_for(5)) {
-				QThread::msleep(5);
-				continue;
-			}
-			std::unique_lock<std::mutex> ll(lock.d_lock, std::adopt_lock_t{});
-			lock.notify_all();
-			atomWait(ll, 15);
-		}*/
-		return true;
+		return remaining() == 0;
 	}
-	else {
-		// wait for at most milli_time milliseconds
-		qint64 current = vipGetMilliSecondsSinceEpoch();
-		while (this->remaining() > 0) {
 
-			qint64 wait_time = milli_time - (vipGetMilliSecondsSinceEpoch() - current);
-			if (wait_time <= 0)
-				return false;
-
-			if (!lock.try_lock_for(wait_time))
-				return false;
-
-			auto ll = lock.adopt_lock();
-			lock.notify_all();
-			atomWait(ll, 15);
-			if (vipGetMilliSecondsSinceEpoch() - current > milli_time)
-				return this->remaining() == 0;
-		}
-		return true;
+	const qint64 start = vipGetMilliSecondsSinceEpoch();
+	while (remaining() > 0 && !m_stop) {
+		const qint64 left = milli_time - (vipGetMilliSecondsSinceEpoch() - start);
+		if (left <= 0)
+			return false;
+		atomWait(ll, static_cast<int>(qMin<qint64>(left, 15)));
 	}
+	return remaining() == 0;
 }
 
 int TaskPool::remaining() const

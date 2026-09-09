@@ -16,7 +16,29 @@
 
 #include <atomic>
 #include <memory>
+#include <QElapsedTimer>
 #include <QThread>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <ctime>
+#endif
+
+/// Processor time charged to the whole process, in milliseconds. A wait that
+/// sleeps leaves it flat; a wait that spins makes it follow the clock.
+static qint64 processorMilliseconds()
+{
+#ifdef _WIN32
+	FILETIME creation, exited, kernel, user;
+	if (!GetProcessTimes(GetCurrentProcess(), &creation, &exited, &kernel, &user))
+		return 0;
+	const auto toMs = [](const FILETIME& f) { return ((static_cast<qint64>(f.dwHighDateTime) << 32) | f.dwLowDateTime) / 10000; };
+	return toMs(kernel) + toMs(user);
+#else
+	return static_cast<qint64>(std::clock()) * 1000 / CLOCKS_PER_SEC;
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Test processings, kept to the strict minimum.
@@ -65,6 +87,27 @@ public:
 
 protected:
 	void apply() override { outputAt(0)->setData(create(QVariant(inputAt(0)->data().value<double>() + 1.0))); }
+};
+
+/// Takes a long time and no processor while doing so.
+class SlowProcessing : public VipProcessingObject
+{
+	Q_OBJECT
+	VIP_IO(VipInput input)
+	VIP_IO(VipOutput output)
+
+public:
+	SlowProcessing(QObject* parent = nullptr)
+	  : VipProcessingObject(parent)
+	{
+	}
+
+protected:
+	void apply() override
+	{
+		QThread::msleep(400);
+		outputAt(0)->setData(create(inputAt(0)->data().data()));
+	}
 };
 
 /// Carries a multi input, so the container operations can be exercised.
@@ -993,6 +1036,32 @@ private Q_SLOTS:
 
 		QVERIFY2(sourcesRead, "the container must be readable while the pipeline runs");
 		QCOMPARE(list.outputAt(0)->data().value<double>(), 2.0);
+	}
+
+	/// The pool thread held the mutex of the pool for the whole processing, so
+	/// every bounded wait spun in try_lock_for until the processing was over:
+	/// the calling thread, most often the one of the interface, burnt a core for
+	/// as long as the work lasted. The wait now sleeps on the condition, which
+	/// shows as processor time far below the elapsed time.
+	void waitingForAProcessingDoesNotBurnTheProcessor()
+	{
+		SlowProcessing proc;
+		proc.setComputeTimeStatistics(false);
+		proc.setScheduleStrategy(VipProcessingObject::Asynchronous, true);
+		proc.inputAt(0)->setData(makeData(1.0));
+		QVERIFY(proc.update());
+
+		const qint64 processorBefore = processorMilliseconds();
+		QElapsedTimer timer;
+		timer.start();
+		proc.wait(false, 200);
+		const qint64 elapsed = timer.elapsed();
+		const qint64 processor = processorMilliseconds() - processorBefore;
+
+		QVERIFY2(elapsed >= 150, qPrintable(QString("the wait returned after %1 ms, it did not wait").arg(elapsed)));
+		QVERIFY2(processor * 2 < elapsed, qPrintable(QString("%1 ms of processor time for %2 ms of wait").arg(processor).arg(elapsed)));
+
+		QVERIFY(proc.wait(false, 30000));
 	}
 };
 
