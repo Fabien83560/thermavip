@@ -271,6 +271,44 @@ private Q_SLOTS:
 
 		QVERIFY(array.isNull());
 	}
+
+	/// Reading a bounded number of values from a text stream must leave the stream
+	/// where those values end. The reader took the whole stream and then tried to
+	/// put the position back with a value that is -1 whenever the loop stopped on a
+	/// failed extraction, which is the normal case: the stream stayed at the end and
+	/// everything after the values was silently unreadable.
+	void textReaderLeavesTheRestReadable()
+	{
+		QString text = QStringLiteral("header 1.5 2.5 3.5 tail");
+		QTextStream stream(&text, QIODevice::ReadOnly);
+
+		// Start somewhere other than zero: the restored position is an absolute one,
+		// and at zero a wrong one and a right one agree.
+		QString header;
+		stream >> header;
+		QCOMPARE(header, QStringLiteral("header"));
+
+		QVector<vip_long_double> values(3);
+		QCOMPARE(vipReadNLongDouble(stream, values), 3);
+		QCOMPARE(static_cast<double>(values[2]), 3.5);
+
+		const QString rest = stream.readAll().trimmed();
+		QCOMPARE(rest, QStringLiteral("tail"));
+	}
+
+	/// Same for the appending reader, which stops when the values run out.
+	void appendingTextReaderLeavesTheRestReadable()
+	{
+		QString text = QStringLiteral("10 20 end of line");
+		QTextStream stream(&text, QIODevice::ReadOnly);
+
+		QVector<vip_long_double> values;
+		QCOMPARE(vipReadNLongDoubleAppend(stream, values, 8), 2);
+		QCOMPARE(values.size(), 2);
+
+		const QString rest = stream.readAll().trimmed();
+		QCOMPARE(rest, QStringLiteral("end of line"));
+	}
 };
 
 VIP_TEST_MAIN(TestSerialization)
