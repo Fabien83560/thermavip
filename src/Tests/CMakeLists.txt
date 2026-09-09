@@ -11,3 +11,4 @@
 add_subdirectory(DataType)
 add_subdirectory(Core)
 add_subdirectory(Gui)
+add_subdirectory(Annotation)

@@ -38,6 +38,8 @@
 
 #include <qsettings.h>
 #include <qsqldatabase.h>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <qsqldriver.h>
 #include <qsqlerror.h>
 #include <qsqlquery.h>
@@ -658,11 +660,63 @@ static void convertShape(const VipShape& sh, QPolygon& p, QRect& r)
 	}
 }
 
+// Depth of the transaction opened through this file. Everything here shares one
+// connection, and a transaction cannot be nested, so an inner scope must not
+// open a second one.
+static int _vip_transaction_depth = 0;
+
+namespace
+{
+	/// Opens a transaction unless one is already open, and rolls back unless
+	/// commit() was called.
+	class DBTransaction
+	{
+		QSqlDatabase m_db;
+		bool m_owner{ false };
+
+	public:
+		explicit DBTransaction(const QSqlDatabase& db)
+		  : m_db(db)
+		{
+			if (_vip_transaction_depth == 0 && m_db.isOpen() && m_db.driver() && m_db.driver()->hasFeature(QSqlDriver::Transactions) && m_db.transaction())
+				m_owner = true;
+			if (m_owner)
+				++_vip_transaction_depth;
+		}
+		DBTransaction(const DBTransaction&) = delete;
+		DBTransaction& operator=(const DBTransaction&) = delete;
+		~DBTransaction()
+		{
+			if (m_owner) {
+				m_db.rollback();
+				--_vip_transaction_depth;
+			}
+		}
+		bool commit()
+		{
+			if (!m_owner)
+				return true;
+			m_owner = false;
+			--_vip_transaction_depth;
+			if (m_db.commit())
+				return true;
+			VIP_LOG_ERROR("Cannot commit to the database: " + m_db.lastError().text());
+			m_db.rollback();
+			return false;
+		}
+	};
+}
+
 QList<qint64> vipSendToDB(const QString& userName, const QString& camera, const QString& device, Vip_experiment_id pulse, const Vip_event_list& all_shapes, VipProgress* p)
 {
 	QSqlDatabase db = createConnection();
 	if (!db.isOpen())
 		return QList<qint64>();
+
+	// Each event is one row in thermal_events and then its rows in
+	// thermal_events_instances. A failure between the two left an event with no
+	// instance: invisible to any view that joins them, but present and counted.
+	DBTransaction transaction(db);
 
 	Vip_event_list shapes = all_shapes;
 	/* for (qsizetype i = 0; i < lst.size(); ++i)
@@ -876,6 +930,9 @@ QList<qint64> vipSendToDB(const QString& userName, const QString& camera, const 
 		}
 	}
 
+	if (!transaction.commit())
+		return QList<qint64>();
+
 	return resids;
 }
 
@@ -897,9 +954,11 @@ bool vipDBTransaction(const std::function<bool()>& fn)
 	if (!vipDBHasTransactions())
 		return fn();
 
+	++_vip_transaction_depth;
 	if (!db.transaction()) {
 		VIP_LOG_ERROR("Cannot start a database transaction: " + db.lastError().text());
 		return fn();
+	--_vip_transaction_depth;
 	}
 	if (!fn()) {
 		db.rollback();
@@ -923,6 +982,10 @@ bool vipRemoveFromDB(const QList<qint64>& ids, VipProgress* p)
 	if (!db.isOpen())
 		return false;
 
+	// The master row goes first, its instances after. A failure between the two
+	// leaves instances no identifier points at any more.
+	DBTransaction transaction(db);
+
 	for (qsizetype i = 0; i < ids.size(); ++i) {
 		if (p)
 			p->setValue(i);
@@ -943,7 +1006,7 @@ bool vipRemoveFromDB(const QList<qint64>& ids, VipProgress* p)
 			}
 		}
 	}
-	return true;
+	return transaction.commit();
 }
 
 bool vipChangeColumnInfoDB(const QList<qint64>& ids, const QString& column, const QString& value, VipProgress* p)
@@ -1799,21 +1862,16 @@ static QString polygonToJSON(const QPolygon& poly)
 
 static QString addDoubleQuotes(const QString& str)
 {
-	QString tmp = str;
-	for (qsizetype i = 0; i < str.size(); ++i) {
-		if (tmp[(QString::size_type)i] == '"' && i > 0 && i < str.size() - 1)
-			tmp[(QString::size_type)i] = ' ';
-	}
-
-	if (tmp.startsWith("\"") && tmp.endsWith("\""))
-		return tmp;
-
-	if (tmp.startsWith("\""))
-		tmp[0] = ' ';
-	if (tmp.endsWith("\""))
-		tmp[tmp.size() - 1] = ' ';
-
-	return "\"" + tmp + "\"";
+	// This replaced inner quotes with spaces, left backslashes alone and treated a
+	// value that already started and ended with a quote as finished: a comment
+	// containing a quote came back altered, and one containing a backslash produced
+	// a document no parser accepts. Let Qt escape it.
+	const QByteArray quoted = QJsonDocument(QJsonArray{ QJsonValue(str) }).toJson(QJsonDocument::Compact);
+	const int first = quoted.indexOf('"');
+	const int last = quoted.lastIndexOf('"');
+	if (first < 0 || last <= first)
+		return QStringLiteral("\"\"");
+	return QString::fromUtf8(quoted.mid(first, last - first + 1));
 }
 
 QByteArray vipEventsToJson(const Vip_event_list& all_shapes, VipProgress* p)
@@ -2053,7 +2111,9 @@ QByteArray vipEventsToJson(const Vip_event_list& all_shapes, VipProgress* p)
 	str << "}\n";
 
 	str.flush();
-	return res.toLatin1();
+	// UTF-8, not Latin-1: the latter turned every character outside it into a
+	// question mark, in a document that is UTF-8 by definition.
+	return res.toUtf8();
 }
 
 static qint64 toTimestamp(const QJsonObject& obj, const QString& name)
