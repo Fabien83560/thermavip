@@ -173,10 +173,10 @@ static int registerStreamOperators()
 }
 static int _regiterStreamOperators = vipStaticInit("vipAddInitializationFunction(registerStreamOperators)", []() { vipAddInitializationFunction(registerStreamOperators); });
 
-VipErrorData* VipErrorHandler::_null_error()
+const std::shared_ptr<const VipErrorData>& VipErrorHandler::_null_error()
 {
-	static VipErrorData inst;
-	return &inst;
+	static const std::shared_ptr<const VipErrorData> inst = std::make_shared<const VipErrorData>();
+	return inst;
 }
 
 class VipConnection::PrivateData

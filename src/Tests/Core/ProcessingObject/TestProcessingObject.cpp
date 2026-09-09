@@ -1197,6 +1197,50 @@ private Q_SLOTS:
 
 		QVERIFY2(readInTime, "the list must be readable while it configures a processing");
 	}
+
+	/// The error was handed out by reference and deleted by the next setError()
+	/// or resetError(), on a class whose documentation invites any thread to read
+	/// it and which resets before every run. The reader now holds a share of what
+	/// it reads. Meant to be run under a sanitiser, where the old code reports a
+	/// read of freed memory.
+	void readingTheErrorWhileItIsReplacedIsSafe()
+	{
+		MultiplyByProperty proc;
+		proc.setLogErrors(QSet<int>());
+
+		std::atomic<bool> stop{ false };
+		std::atomic<int> seen{ 0 };
+
+		QThread* reader = QThread::create([&]() {
+			while (!stop.load()) {
+				const VipErrorData err = proc.errorData();
+				if (!err.errorString().isEmpty())
+					++seen;
+				proc.errorString();
+				proc.errorCode();
+				proc.hasError();
+			}
+		});
+		reader->start();
+
+		QElapsedTimer started;
+		started.start();
+		while (seen.load() == 0 && started.elapsed() < 30000) {
+			proc.setError("replaced", -2);
+			proc.resetError();
+		}
+		for (int i = 0; i < 5000; ++i) {
+			proc.setError("replaced", -2);
+			proc.resetError();
+		}
+
+		stop.store(true);
+		QVERIFY(reader->wait(30000));
+		delete reader;
+
+		QVERIFY2(seen.load() > 0, "the reader must have seen an error");
+		QVERIFY(!proc.hasError());
+	}
 };
 
 VIP_TEST_MAIN(TestProcessingObject)

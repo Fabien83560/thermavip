@@ -32,7 +32,9 @@
 #ifndef VIP_PROCESSING_OBJECT_H
 #define VIP_PROCESSING_OBJECT_H
 
+#include <atomic>
 #include <deque>
+#include <memory>
 #include <type_traits>
 
 #include <QIcon>
@@ -198,12 +200,6 @@ public:
 	  , d_data(_null_error())
 	{
 	}
-	~VipErrorHandler()
-	{
-		VipErrorData* prev = d_data.exchange(_null_error());
-		if (prev != _null_error())
-			delete prev;
-	}
 	/// @brief Set the current error status.
 	/// The error will be redirected to the parent VipProcessingObject.
 	void setError(const QString& err, int code = -1) { setError(VipErrorData(err, code)); }
@@ -211,37 +207,36 @@ public:
 	{
 		// err was moved from, so reading it again gave the extension point and the
 		// signal an empty error. Report the object that now holds it.
-		VipErrorData* error = new VipErrorData(std::move(err));
-		VipErrorData* prev = d_data.exchange(error);
-		if (prev != _null_error())
-			delete prev;
+		const std::shared_ptr<const VipErrorData> error = std::make_shared<const VipErrorData>(std::move(err));
+		std::atomic_store(&d_data, error);
+		d_has_error.store(true, std::memory_order_relaxed);
 		newError(*error);
 		emitError(this, *error);
 	}
 	void setError(const VipErrorData& err)
 	{
-		VipErrorData* error = new VipErrorData(err);
-		VipErrorData* prev = d_data.exchange(error);
-		if (prev != _null_error())
-			delete prev;
+		std::atomic_store(&d_data, std::make_shared<const VipErrorData>(err));
+		d_has_error.store(true, std::memory_order_relaxed);
 		newError(err);
 		emitError(this, err);
 	}
 	/// @brief Resets the current error status.
 	VIP_ALWAYS_INLINE void resetError()
 	{
-		VipErrorData* prev = d_data.exchange(_null_error());
-		if (prev != _null_error())
-			delete prev;
+		std::atomic_store(&d_data, _null_error());
+		d_has_error.store(false, std::memory_order_relaxed);
 	}
 	/// @brief Return the last error.
-	VIP_ALWAYS_INLINE const VipErrorData& errorData() const { return *d_data; }
+	/// By value: the reference this returned was to an object that the next
+	/// setError() or resetError() deleted, on a class documented thread safe, and
+	/// the reset happens before every run.
+	VIP_ALWAYS_INLINE VipErrorData errorData() const { return *std::atomic_load(&d_data); }
 	/// @brief Returns the last error string
 	VIP_ALWAYS_INLINE QString errorString() const { return errorData().errorString(); }
 	/// @brief Returns the last error code, ot 0 if no error occured.
 	VIP_ALWAYS_INLINE int errorCode() const { return errorData().errorCode(); }
 	/// @brief Returns true if an error occurred during the last operation.
-	VIP_ALWAYS_INLINE bool hasError() const { return d_data != _null_error(); }
+	VIP_ALWAYS_INLINE bool hasError() const { return d_has_error.load(std::memory_order_relaxed); }
 
 	
 	
@@ -257,8 +252,9 @@ Q_SIGNALS:
 	void error(QObject*, const VipErrorData&);
 
 private:
-	static VipErrorData* _null_error();
-	std::atomic<VipErrorData*> d_data;
+	static const std::shared_ptr<const VipErrorData>& _null_error();
+	std::shared_ptr<const VipErrorData> d_data;
+	std::atomic<bool> d_has_error{ false };
 };
 
 class VipDataList;
