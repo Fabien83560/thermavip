@@ -195,10 +195,13 @@ class CustomExec:
         global _in_process
         _in_process = False
         self.running=True
-        ret= self.init_exec( code,silent,store_history,user_expressions,allow_stdin)
-        self.running=False
-        _in_process = True
-        return ret
+        # In a finally: an exception used to leave the console declared busy for
+        # good, and the editor then refused to run anything else.
+        try:
+            return self.init_exec( code,silent,store_history,user_expressions,allow_stdin)
+        finally:
+            self.running=False
+            _in_process = True
         
 
 
