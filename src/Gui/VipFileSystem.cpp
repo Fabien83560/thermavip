@@ -113,7 +113,10 @@ public:
 				memset(&file, 0, sizeof(file));
 				QByteArray name = info.canonicalFilePath().toLatin1(); 
 				DWORD_PTR hr = SHGetFileInfoA(name.data(), FILE_ATTRIBUTE_NORMAL, &file, sizeof(file), SHGFI_ICON | SHGFI_USEFILEATTRIBUTES | SHGFI_SMALLICON);
-				if (SUCCEEDED(hr)) {
+				// This one returns a non zero value on success, not an HRESULT: the
+				// macro said yes on failure, where the handle is null, and no on some
+				// successes, where the icon was then leaked.
+				if (hr != 0 && file.hIcon) {
 					// The display name is now held in sfi.szDisplayName.
 					res_icon = QPixmap::fromImage(QImage::fromHICON(file.hIcon));
 					DestroyIcon(file.hIcon);
@@ -449,7 +452,9 @@ bool VipMapFileSystemTreeItem::operator<(const QTreeWidgetItem& other) const
 
 	QString t2 = other.text(column);
 	bool ok2 = false;
-	double v2 = t2.toDouble(&ok1);
+	// ok2, not ok1: the second flag was never written, so it stayed false and the
+	// numeric comparison below was dead on every column.
+	double v2 = t2.toDouble(&ok2);
 
 	if (ok1 && ok2)
 		return v1 < v2;
@@ -549,9 +554,12 @@ bool VipMapFileSystemTreeItem::setChildren(const VipPathList& _children)
 		m_need_full_update = true;
 	}
 	else {
-		// compare attributes
-		for (int i = 0; i < _children.size(); ++i) {
-			if (_children[i] != m_children[i]) {
+		// compare attributes. The comparison operator of a path only looks at the
+		// path itself, which is what the branch above has just established to be
+		// equal: this loop could never fire, so a size or a date that changed was
+		// never refreshed.
+		for (int i = 0; i < _children.size() && i < m_children.size(); ++i) {
+			if (_children[i].attributes() != m_children[i].attributes()) {
 				m_need_attribute_update = true;
 				break;
 			}
@@ -1538,10 +1546,19 @@ void VipMapFileSystemTree::dropEvent(QDropEvent* evt)
 	if (evt->mimeData()->hasFormat("VipMimeDataMapFile"))
 		lst = static_cast<const VipMimeDataMapFile*>(evt->mimeData())->paths();
 	else if (evt->mimeData()->hasUrls()) {
+		// Dropping below the last item gives no item at all, which is ordinary; the
+		// walk up then starts on nothing. The other branch of this function already
+		// tests it, forty lines further down.
 		QTreeWidgetItem* it = this->itemAt(evt->VIP_EVT_POSITION());
+		if (!it) {
+			evt->ignore();
+			return;
+		}
 		QTreeWidgetItem* top = it;
-		while (indexOfTopLevelItem(top) < 0)
+		while (top && indexOfTopLevelItem(top) < 0)
 			top = top->parent();
+		if (!top)
+			return;
 
 		if (it->text(0) == "Shortcuts" && top == it) {
 			// add paths to shortcuts
@@ -1589,12 +1606,16 @@ void VipMapFileSystemTree::dropEvent(QDropEvent* evt)
 
 	QTreeWidgetItem* dst = this->itemAt(evt->VIP_EVT_POSITION());
 	evt->accept();
+	if (!dst)
+		return;
 
 	// get the top level item
 	// vip_debug("dst: '%s'\n", static_cast<VipMapFileSystemTreeItem*>(dst)->path().canonicalPath().toLatin1().data());
 	QTreeWidgetItem* top = dst;
-	while (indexOfTopLevelItem(top) < 0)
+	while (top && indexOfTopLevelItem(top) < 0)
 		top = top->parent();
+	if (!top)
+		return;
 
 	// For now, only accept drops in the 'Shortcuts' item
 	if (top != dst || top->text(0) != "Shortcuts")
