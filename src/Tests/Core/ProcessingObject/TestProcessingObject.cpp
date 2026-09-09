@@ -682,6 +682,32 @@ private Q_SLOTS:
 		QVERIFY(!list.take(list.size()));
 		QCOMPARE(list.size(), 2);
 	}
+
+	/// Assigning an output left its data behind, so the replaced output kept
+	/// serving the value of the one it was supposed to become. The sibling
+	/// property class always assigned it.
+	void assigningAnOutputCarriesItsData()
+	{
+		VipOutput first("first");
+		first.setData(VipAnyData(QVariant(1.0), 10));
+		VipOutput second("second");
+		second.setData(VipAnyData(QVariant(2.0), 20));
+
+		first = second;
+
+		QCOMPARE(first.data().value<double>(), 2.0);
+		QCOMPARE(first.data().time(), (qint64)20);
+	}
+
+	/// The set of error codes actually logged was copied from an empty member in
+	/// the initialiser list, before the constructor body filled it, so nothing
+	/// was ever logged.
+	void theDefaultLoggedErrorCodesAreNotEmpty()
+	{
+		QVERIFY(VipProcessingManager::isLogErrorEnabled(VipProcessingObject::RuntimeError));
+		QVERIFY(VipProcessingManager::isLogErrorEnabled(VipProcessingObject::WrongInput));
+		QVERIFY(VipProcessingManager::isLogErrorEnabled(VipProcessingObject::IOError));
+	}
 };
 
 VIP_TEST_MAIN(TestProcessingObject)

@@ -944,7 +944,12 @@ VipOutput::VipOutput(const VipOutput& other)
 
 VipOutput& VipOutput::operator=(const VipOutput& other)
 {
-	static_cast<UniqueProcessingIO&>(*this) = other;
+	if (this == &other)
+		return *this;
+	static_cast<UniqueProcessingIO&>(*this) = static_cast<const UniqueProcessingIO&>(other);
+	// The current data was the one member left behind, so an assigned output kept
+	// serving its own; the sibling class assigns it.
+	d_data = other.d_data;
 	m_bufferize_outputs = other.m_bufferize_outputs;
 	m_buffer = other.m_buffer;
 	return *this;
@@ -1074,13 +1079,20 @@ public:
 	  , list_limit_type(_list_limit_type)
 	  , max_list_size(_max_list_size)
 	  , max_list_memory(_max_list_memory)
+	  , _log_errors(defaultLogErrors())
 	  , errors(_log_errors)
 	  , _obj_types(0)
 	  , _obj_infos(0)
 	  , _dirty_objects(1)
 	{
-		_log_errors << VipProcessingObject::RuntimeError << VipProcessingObject::WrongInput << VipProcessingObject::WrongInputNumber << VipProcessingObject::ConnectionNotOpen
-			    << VipProcessingObject::DeviceNotOpen << VipProcessingObject::IOError;
+	}
+
+	// errors is a copy, taken in the initialiser list: filling _log_errors in the
+	// body left the active set empty, so no error code was ever logged.
+	static QSet<int> defaultLogErrors()
+	{
+		return QSet<int>{ VipProcessingObject::RuntimeError,	   VipProcessingObject::WrongInput,	VipProcessingObject::WrongInputNumber,
+				  VipProcessingObject::ConnectionNotOpen, VipProcessingObject::DeviceNotOpen, VipProcessingObject::IOError };
 	}
 
 	// global default values
@@ -3682,6 +3694,10 @@ QList<const VipProcessingObject*> VipProcessingObject::allObjects()
 	VipProcessingManager::instance().d_data->_obj_infos = additionals.size();
 	VipProcessingManager::instance().d_data->_dirty_objects = 0;
 
+	// The list owns these model objects and nothing else refers to them: the
+	// callers only read their metadata. Clearing it alone leaked them all on
+	// every rebuild, that is on every plugin load.
+	qDeleteAll(VipProcessingManager::instance().d_data->_allObjects);
 	VipProcessingManager::instance().d_data->_allObjects.clear();
 	int count = types.size() + additionals.size();
 	for (int i = 0; i < count; ++i) {
@@ -3711,6 +3727,11 @@ QList<const VipProcessingObject*> VipProcessingObject::allObjects()
 			else
 				continue;
 		}
+		// Info::create() returns nullptr as soon as its metatype is no longer
+		// instantiable, which happens once a plugin is unloaded since the
+		// registered infos are never purged.
+		if (!obj)
+			continue;
 		VipProcessingManager::instance().d_data->_allObjects.append(obj);
 
 		// unlock the mutex: VipProcessingManager and VipUniqueId are already protected
@@ -3868,9 +3889,19 @@ VipProcessingList::VipProcessingList(QObject* parent)
 VipProcessingList::~VipProcessingList()
 {
 	setEnabled(false);
-	wait(false);
-	for (int i = 0; i < size(); ++i)
-		delete d_data->objects[i];
+	try {
+		wait(false);
+	}
+	catch (const std::exception& e) {
+		VIP_LOG_ERROR("VipProcessingList: " + QString(e.what()));
+	}
+	catch (...) {
+	}
+	// Take the objects out before destroying them: a callback triggered by one
+	// destruction used to see the ones already destroyed still in the container.
+	const QList<VipProcessingObject*> objects = std::move(d_data->objects);
+	d_data->objects.clear();
+	qDeleteAll(objects);
 }
 
 void VipProcessingList::computeParams()
