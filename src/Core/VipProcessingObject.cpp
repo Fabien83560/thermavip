@@ -74,7 +74,7 @@ QStringList VipAnyData::mergeAttributes(const QVariantMap& attrs)
 	return res;
 }
 
-int VipAnyData::memoryFootprint() const
+qint64 VipAnyData::memoryFootprint() const
 {
 	return sizeof(qint64) * 2 + vipGetMemoryFootprint(d_data) + vipGetMemoryFootprint(QVariant::fromValue(m_attributes));
 }
@@ -1086,14 +1086,14 @@ public:
 	// global default values
 	int _list_limit_type;
 	int _max_list_size;
-	int _max_list_memory;
+	qint64 _max_list_memory;
 	QSet<int> _log_errors;
 	bool _lock_list_manager;
 
 	QMutex mutex;
 	int list_limit_type;
 	int max_list_size;
-	int max_list_memory;
+	qint64 max_list_memory;
 	ErrorCodes errors;
 	PriorityMap priorities;
 	QList<VipDataList*> instances;
@@ -1245,7 +1245,7 @@ void VipProcessingManager::setMaxListSize(int size)
 	Q_EMIT instance().changed();
 }
 
-void VipProcessingManager::setMaxListMemory(int size)
+void VipProcessingManager::setMaxListMemory(qint64 size)
 {
 	QMutexLocker lock(&instance().d_data->mutex);
 	instance().d_data->max_list_memory = size;
@@ -1261,7 +1261,7 @@ int VipProcessingManager::maxListSize()
 {
 	return instance().d_data->max_list_size;
 }
-int VipProcessingManager::maxListMemory()
+qint64 VipProcessingManager::maxListMemory()
 {
 	return instance().d_data->max_list_memory;
 }
@@ -1483,7 +1483,7 @@ int VipFIFOList::status() const
 	return m_list.size() > 0 ? (int)m_list.size() : m_last.isValid() ? 0 : -1;
 }
 
-int VipFIFOList::memoryFootprint() const
+qint64 VipFIFOList::memoryFootprint() const
 {
 	_SHAREDSPINLOCKER();
 	int size = 0;
@@ -1646,7 +1646,7 @@ qint64 VipLIFOList::time() const
 		return m_last.time();
 }
 
-int VipLIFOList::memoryFootprint() const
+qint64 VipLIFOList::memoryFootprint() const
 {
 	_SHAREDSPINLOCKER();
 	int size = 0;
@@ -1751,7 +1751,7 @@ qint64 VipLastAvailableList::time() const
 		return d_data.time();
 }
 
-int VipLastAvailableList::memoryFootprint() const
+qint64 VipLastAvailableList::memoryFootprint() const
 {
 	_SHAREDSPINLOCKER();
 	if (m_has_new_data)
@@ -4961,7 +4961,7 @@ void serialize_VipDataListManager(VipArchive& arch)
 
 			int limit_type = arch.read("listLimitType").toInt();
 			int max_list_size = arch.read("maxListSize").toInt();
-			int max_memory = arch.read("maxListMemory").toInt();
+			qint64 max_memory = arch.read("maxListMemory").toLongLong();
 			QSet<int> logErrors = arch.read("logErrors").value<QSet<int>>();
 			PriorityMap prio = arch.read("priorities").value<PriorityMap>();
 			bool has_error = arch.hasError();

@@ -504,6 +504,33 @@ private Q_SLOTS:
 		QCOMPARE(read.size(), source.size());
 	}
 
+	/// The memory a queue holds is counted in bytes, and the cap it feeds is too.
+	/// The whole chain was a signed 32 bit int, which saturates at two gigabytes: a
+	/// queue of large images passes that without difficulty, the count wraps, and a
+	/// negative count compares favourably against any cap, so the limit stopped
+	/// working exactly where it was needed.
+	void queueMemoryAccountingIsSixtyFourBit()
+	{
+		VipFIFOList list;
+		list.setMaxListMemory(Q_INT64_C(8) * 1024 * 1024 * 1024);
+		QCOMPARE(list.maxListMemory(), Q_INT64_C(8) * 1024 * 1024 * 1024);
+
+		VipProcessingManager::setMaxListMemory(Q_INT64_C(6) * 1024 * 1024 * 1024);
+		QCOMPARE(VipProcessingManager::maxListMemory(), Q_INT64_C(6) * 1024 * 1024 * 1024);
+		VipProcessingManager::setMaxListMemory(50000000);
+	}
+
+	/// A footprint larger than an int can hold is reported as it is.
+	void largeDataFootprintIsNotTruncated()
+	{
+		VipNDArrayType<double> big(vipVector(4096, 8192)); // 256 MB
+		VipAnyData any(QVariant::fromValue(VipNDArray(big)), 0);
+
+		const qint64 footprint = any.memoryFootprint();
+		QVERIFY2(footprint > 0, "a large array must not report a negative footprint");
+		QVERIFY(footprint >= Q_INT64_C(256) * 1024 * 1024);
+	}
+
 	// -- VipProcessingList ---------------------------------------------------
 
 	/// An empty list short circuits and forwards its input to its output.

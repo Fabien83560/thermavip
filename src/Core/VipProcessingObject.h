@@ -163,7 +163,10 @@ public:
 	}
 
 	/// Returns an approximation of the memory footprint for this object.
-	int memoryFootprint() const;
+	/// Size in bytes. 64 bit: the cap it feeds is expressed in bytes and a queue of
+	/// large images passes two gigabytes without difficulty, at which point a signed
+	/// 32 bit count overflows and compares favourably against any cap.
+	qint64 memoryFootprint() const;
 };
 
 typedef QVector<VipAnyData> VipAnyDataList;
@@ -291,14 +294,14 @@ public:
 	/// Set the list maximum size for all existing and future VipDataList instances
 	static void setMaxListSize(int size);
 	/// Set the list maximum memory footprint for all existing and future VipDataList instances
-	static void setMaxListMemory(int size);
+	static void setMaxListMemory(qint64 size);
 
 	/// Returns the current default list limit type
 	static int listLimitType();
 	/// Returns the current default maximum list size
 	static int maxListSize();
 	/// Returns the current default maximum memory footprint
-	static int maxListMemory();
+	static qint64 maxListMemory();
 
 	/// Error management for all processings
 	static void setLogErrorEnabled(int error_code, bool enable);
@@ -341,7 +344,7 @@ private:
 class VIP_CORE_EXPORT VipDataList
 {
 	int m_max_size;
-	int m_max_memory;
+	qint64 m_max_memory;
 	int m_data_limit_type;
 
 public:
@@ -401,12 +404,12 @@ public:
 	virtual void clear() = 0;
 
 	/// Returns the memory footprint of the data list
-	virtual int memoryFootprint() const = 0;
+	virtual qint64 memoryFootprint() const = 0;
 
 	/// Set the maximum list size
 	void setMaxListSize(int size) { m_max_size = size; }
 	/// Set the maximum list memory footprint
-	void setMaxListMemory(int memory) { m_max_memory = memory; }
+	void setMaxListMemory(qint64 memory) { m_max_memory = memory; }
 
 	/// Set the list limit type (combination of Number and MemorySize, or None)
 	void setListLimitType(int type) { m_data_limit_type = type; }
@@ -416,7 +419,7 @@ public:
 	/// Returns the maximum list size
 	int maxListSize() const { return m_max_size; }
 	/// Returns the maximum list memory footprint in bytes
-	int maxListMemory() const { return m_max_memory; }
+	qint64 maxListMemory() const { return m_max_memory; }
 };
 
 /// @brief A FIFO, thread safe VipDataList
@@ -449,7 +452,7 @@ public:
 	virtual int status() const;
 	virtual VipDataList::Type listType() const { return FIFO; }
 	virtual int remaining() const;
-	virtual int memoryFootprint() const;
+	virtual qint64 memoryFootprint() const;
 	virtual void clear();
 };
 
@@ -477,7 +480,7 @@ public:
 	virtual int status() const;
 	virtual VipDataList::Type listType() const { return LIFO; }
 	virtual int remaining() const { return (int)m_list.size(); }
-	virtual int memoryFootprint() const;
+	virtual qint64 memoryFootprint() const;
 	virtual void clear();
 };
 
@@ -503,7 +506,7 @@ public:
 	virtual int status() const;
 	virtual VipDataList::Type listType() const { return LastAvailable; }
 	virtual int remaining() const { return hasNewData() ? 1 : 0; }
-	virtual int memoryFootprint() const;
+	virtual qint64 memoryFootprint() const;
 	virtual void clear();
 };
 
@@ -1041,7 +1044,7 @@ public:
 	/// Returns the list maximum size
 	VIP_ALWAYS_INLINE int maxListSize() const { return m_input_list->maxListSize(); }
 	/// Returns the list maximum memory size
-	VIP_ALWAYS_INLINE int maxListMemory() const { return m_input_list->maxListMemory(); }
+	VIP_ALWAYS_INLINE qint64 maxListMemory() const { return m_input_list->maxListMemory(); }
 	/// Returns the list limit type
 	VIP_ALWAYS_INLINE int listLimitType() const { return m_input_list->listLimitType(); }
 	/// Retruns true if the VipInput has a new data available, false otherwise
@@ -1105,7 +1108,7 @@ private:
 	VipDataList::Type m_type;
 	int m_list_limit_type;
 	int m_max_list_size;
-	int m_max_list_memory;
+	qint64 m_max_list_memory;
 };
 
 /// \a VipOutput represents an output of a VipProcessingObject.
