@@ -184,8 +184,13 @@ struct VipHybridVector
 	template<class Other, std::enable_if_t<VipIsIterable_v<Other>, int> = 0>
 	VIP_ALWAYS_INLINE VipHybridVector(const Other& v) noexcept
 	{
-		if(v.size() == N)
-			vipForEachDims([&](auto i) { elems[i] = static_cast<T>(v[i]); }, std::make_integer_sequence<qsizetype, (qsizetype)N>{});
+		// A size that does not match used to leave the whole object as it came off
+		// the stack, and this constructor is implicit: the shape then indexed an
+		// array with arbitrary values. Zero first, then copy what is there.
+		vipForEachDims([&](auto i) { elems[i] = T(); }, std::make_integer_sequence<qsizetype, (qsizetype)N>{});
+		const qsizetype count = qMin((qsizetype)v.size(), (qsizetype)N);
+		for (qsizetype i = 0; i < count; ++i)
+			elems[i] = static_cast<T>(v[i]);
 	}
 
 	// iterator support

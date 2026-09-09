@@ -10,6 +10,7 @@
 
 #include "VipNDArray.h"
 #include "VipMultiNDArray.h"
+#include "VipNDRect.h"
 #include "VipNDArrayStatistics.h"
 #include "VipStack.h"
 
@@ -206,6 +207,68 @@ private Q_SLOTS:
 
 		const int higher = vipHigherArrayType(qMetaTypeId<int>(), types);
 		QVERIFY(higher != 0);
+	}
+
+	/// The engine clips every region of interest by the bounds of the image with
+	/// this. It used neither the start of one rectangle nor the end of the other,
+	/// so a region overlapping an edge came back extended rather than clipped,
+	/// and the engine then walked past the array.
+	void intersectingTwoRectanglesClips()
+	{
+		struct Case
+		{
+			qsizetype a0, a1, b0, b1, r0, r1;
+		};
+		const Case cases[] = {
+			{ 0, 10, 2, 5, 2, 5 },	 // contained
+			{ 3, 8, 0, 12, 3, 8 },	 // containing
+			{ 2, 5, 0, 10, 2, 5 },	 // overlapping on the left
+			{ 0, 5, 2, 10, 2, 5 },	 // overlapping on the right
+		};
+
+		for (const Case& c : cases) {
+			VipNDRect<Vip::None> first(vipVector(c.a0), vipVector(c.a1));
+			VipNDRect<Vip::None> second(vipVector(c.b0), vipVector(c.b1));
+
+			const VipNDRect<Vip::None> result = first & second;
+			const QString where = QString("[%1,%2) & [%3,%4)").arg(c.a0).arg(c.a1).arg(c.b0).arg(c.b1);
+			QVERIFY2(result.start(0) == c.r0 && result.end(0) == c.r1, qPrintable(where));
+
+			// And it is symmetric.
+			const VipNDRect<Vip::None> other = second & first;
+			QVERIFY2(other.start(0) == c.r0 && other.end(0) == c.r1, qPrintable(where + " reversed"));
+		}
+
+		// Disjoint rectangles give nothing.
+		QVERIFY((VipNDRect<Vip::None>(vipVector(0), vipVector(2)) & VipNDRect<Vip::None>(vipVector(5), vipVector(7))).isEmpty());
+	}
+
+	/// The two dimensional specialisation reads its bounds through the accessors
+	/// of the rectangle it holds, not through a pointer to int over it.
+	void theTwoDimensionalRectangleReadsItsOwnBounds()
+	{
+		VipNDRect<2> rect(vipVector(3, 5), vipVector(9, 11));
+
+		QCOMPARE(rect.start(0), (qsizetype)3);
+		QCOMPARE(rect.start(1), (qsizetype)5);
+		QCOMPARE(rect.end(0), (qsizetype)9);
+		QCOMPARE(rect.end(1), (qsizetype)11);
+		QCOMPARE(rect.shape(0), (qsizetype)6);
+		QCOMPARE(rect.shape(1), (qsizetype)6);
+	}
+
+	/// A shape built from a container of the wrong size used to be left entirely
+	/// as it came off the stack, and the constructor is implicit.
+	void aShapeBuiltFromTheWrongSizeIsStillInitialised()
+	{
+		QVector<qsizetype> two;
+		two << 4 << 7;
+
+		const VipCoordinate<4> coord(two);
+		QCOMPARE(coord[0], (qsizetype)4);
+		QCOMPARE(coord[1], (qsizetype)7);
+		QCOMPARE(coord[2], (qsizetype)0);
+		QCOMPARE(coord[3], (qsizetype)0);
 	}
 };
 
