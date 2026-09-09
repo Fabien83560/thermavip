@@ -357,12 +357,22 @@ void VipLogging::directLog(const LogFrame& frame)
 			log = formatLogEntry(frame.text, frame.level, frame.date);
 
 		if (d_data->memory.lock()) {
-			qint32 size;
+			// The segment is named, so any process of the session can write this
+			// header. It is the destination offset of the copy below, and only the
+			// sum used to be tested; the sum itself was computed in 32 bits, where
+			// a value near the maximum wraps negative and passes that test.
+			qint32 size = 0;
 			memcpy(&size, d_data->memory.data(), sizeof(qint32));
-			qint32 new_size = size + log.size();
+			const qsizetype capacity = d_data->memory.size() - (qsizetype)sizeof(qint32);
+			if (size < 0 || (qsizetype)size > capacity) {
+				memset(d_data->memory.data(), 0, d_data->memory.size());
+				size = 0;
+			}
 
-			if (new_size + 4 < d_data->memory.size()) {
-				memcpy(d_data->memory.data(), &new_size, sizeof(qint32));
+			const qsizetype new_size = (qsizetype)size + log.size();
+			if (new_size <= capacity) {
+				const qint32 written = (qint32)new_size;
+				memcpy(d_data->memory.data(), &written, sizeof(qint32));
 				memcpy(static_cast<char*>(d_data->memory.data()) + size + sizeof(qint32), log.data(), log.size());
 			}
 
@@ -383,10 +393,14 @@ QStringList VipLogging::lastLogEntries()
 	QStringList lst;
 
 	if (d_data->memory.lock()) {
-		qint32 size;
+		// Same header, same reason to distrust it: here it is the length of the read.
+		qint32 size = 0;
 		memcpy(&size, d_data->memory.data(), sizeof(qint32));
+		const qsizetype capacity = d_data->memory.size() - (qsizetype)sizeof(qint32);
 
-		if (!size) {
+		if (size <= 0 || (qsizetype)size > capacity) {
+			if (size != 0)
+				memset(d_data->memory.data(), 0, d_data->memory.size());
 			d_data->memory.unlock();
 			return lst;
 		}
