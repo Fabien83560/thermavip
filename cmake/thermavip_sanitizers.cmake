@@ -96,6 +96,12 @@ endif()
 # Must be set before include(CTest), which writes it to DartConfiguration.tcl.
 set(MEMORYCHECK_TYPE "${_vip_memcheck_type}" CACHE STRING "" FORCE)
 
+# allocator_may_return_null: a test asks for an allocation far larger than the
+# address space on purpose, to check that the array handle survives a refusal.
+# Without this the sanitizer aborts on the request instead of returning null,
+# which is the behaviour under test.
+set(MEMORYCHECK_SANITIZER_OPTIONS "allocator_may_return_null=1" CACHE STRING "" FORCE)
+
 # Without suppressions the job is permanently red on Qt and driver noise, and
 # gets ignored within a week.
 set(THERMAVIP_SANITIZER_SUPPRESSIONS "${CMAKE_CURRENT_LIST_DIR}/sanitizer-suppressions.txt"
