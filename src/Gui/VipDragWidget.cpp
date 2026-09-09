@@ -331,7 +331,11 @@ bool VipBaseDragWidget::isMinimized() const
 
 bool VipBaseDragWidget::isDropable() const
 {
-	if (!this->testSupportedOperation(Drop) || (this->parentMultiDragWidget() && this->parentMultiDragWidget()->count() == 1 && !this->testSupportedOperation(Drop)))
+	// The second term asked this again, so it was always false when the first was:
+	// a parent that withdrew the operation did not inhibit its only child. supportClose
+	// below is the one variant that asks the parent, which is what all six meant.
+	if (!this->testSupportedOperation(Drop) ||
+	    (this->parentMultiDragWidget() && this->parentMultiDragWidget()->count() == 1 && !this->parentMultiDragWidget()->testSupportedOperation(Drop)))
 		return false;
 	else {
 		if (qobject_cast<const VipMultiDragWidget*>(this)) {
@@ -346,7 +350,11 @@ bool VipBaseDragWidget::isDropable() const
 
 bool VipBaseDragWidget::isMovable() const
 {
-	if (!this->testSupportedOperation(Move) || (this->parentMultiDragWidget() && this->parentMultiDragWidget()->count() == 1 && !this->testSupportedOperation(Move)))
+	// The second term asked this again, so it was always false when the first was:
+	// a parent that withdrew the operation did not inhibit its only child. supportClose
+	// below is the one variant that asks the parent, which is what all six meant.
+	if (!this->testSupportedOperation(Move) ||
+	    (this->parentMultiDragWidget() && this->parentMultiDragWidget()->count() == 1 && !this->parentMultiDragWidget()->testSupportedOperation(Move)))
 		return false;
 	else {
 		if (qobject_cast<const VipMultiDragWidget*>(this)) {
@@ -361,7 +369,11 @@ bool VipBaseDragWidget::isMovable() const
 
 bool VipBaseDragWidget::supportMaximize() const
 {
-	if (!this->testSupportedOperation(Maximize) || (this->parentMultiDragWidget() && this->parentMultiDragWidget()->count() == 1 && !this->testSupportedOperation(Maximize)))
+	// The second term asked this again, so it was always false when the first was:
+	// a parent that withdrew the operation did not inhibit its only child. supportClose
+	// below is the one variant that asks the parent, which is what all six meant.
+	if (!this->testSupportedOperation(Maximize) ||
+	    (this->parentMultiDragWidget() && this->parentMultiDragWidget()->count() == 1 && !this->parentMultiDragWidget()->testSupportedOperation(Maximize)))
 		return false;
 	else {
 		if (qobject_cast<const VipMultiDragWidget*>(this)) {
@@ -376,7 +388,11 @@ bool VipBaseDragWidget::supportMaximize() const
 
 bool VipBaseDragWidget::supportMinimize() const
 {
-	if (!this->testSupportedOperation(Minimize) || (this->parentMultiDragWidget() && this->parentMultiDragWidget()->count() == 1 && !this->testSupportedOperation(Minimize)))
+	// The second term asked this again, so it was always false when the first was:
+	// a parent that withdrew the operation did not inhibit its only child. supportClose
+	// below is the one variant that asks the parent, which is what all six meant.
+	if (!this->testSupportedOperation(Minimize) ||
+	    (this->parentMultiDragWidget() && this->parentMultiDragWidget()->count() == 1 && !this->parentMultiDragWidget()->testSupportedOperation(Minimize)))
 		return false;
 	else {
 		if (qobject_cast<const VipMultiDragWidget*>(this)) {
@@ -407,7 +423,11 @@ bool VipBaseDragWidget::supportClose() const
 
 bool VipBaseDragWidget::supportReceiveDrop() const
 {
-	if (!this->testSupportedOperation(ReceiveDrop) || (this->parentMultiDragWidget() && this->parentMultiDragWidget()->count() == 1 && !this->testSupportedOperation(ReceiveDrop)))
+	// The second term asked this again, so it was always false when the first was:
+	// a parent that withdrew the operation did not inhibit its only child. supportClose
+	// below is the one variant that asks the parent, which is what all six meant.
+	if (!this->testSupportedOperation(ReceiveDrop) ||
+	    (this->parentMultiDragWidget() && this->parentMultiDragWidget()->count() == 1 && !this->parentMultiDragWidget()->testSupportedOperation(ReceiveDrop)))
 		return false;
 	else {
 		if (qobject_cast<const VipMultiDragWidget*>(this)) {
@@ -720,7 +740,18 @@ bool VipBaseDragWidget::dragThisWidget(QObject* watched, const QPoint& mouse_pos
 
 	QWidget* prev_top_level = topLevelParent();
 
+	// drag.exec() runs a nested event loop. The hidden widget can be closed during
+	// it — WA_DeleteOnClose is set on these, and deleteLater() is called from the
+	// close button — and so can this one. to_hide is already a QPointer, which says
+	// the author expected it; nothing checked it afterwards, and nothing watched
+	// this at all, while everything below dereferences both.
+	QPointer<VipBaseDragWidget> self(this);
+
 	Qt::DropAction dropAction = drag.exec();
+
+	if (!self || !to_hide)
+		return true;
+
 	bool no_drop = (dropAction == Qt::IgnoreAction || !drag.target());
 
 	d_data->mousePress = QPoint(0, 0);
@@ -1396,7 +1427,12 @@ void VipMinimizeWidget::mousePressEvent(QMouseEvent*)
 	parentWidget()->setMaximumWidth(16777215);
 	if (d_data->dragWidget)
 		d_data->dragWidget->show();
+	// This pumps the event loop, so the widget can be closed in the middle of the
+	// restore. The test above shows that was expected; the three dereferences that
+	// followed it had none.
 	vipProcessEvents(nullptr, 100);
+	if (!d_data->dragWidget)
+		return;
 	d_data->dragWidget->showNormal();
 	d_data->dragWidget->setFocus();
 
@@ -1499,6 +1535,14 @@ bool VipMinimizeWidget::eventFilter(QObject*, QEvent* evt)
 
 void VipMinimizeWidget::reorganize()
 {
+	// The close button calls deleteLater() on the drag widget without destroying
+	// this one, which stays a child of the tab widget with its event filter in
+	// place: the next resize of the parent calls back in here. paintEvent already
+	// guards the same pointer; this path did not.
+	if (!d_data->dragWidget) {
+		deleteLater();
+		return;
+	}
 	if (!d_data->dragWidget->isMinimized())
 		return;
 
@@ -1507,8 +1551,12 @@ void VipMinimizeWidget::reorganize()
 	if (!m)
 		return;
 
-	QPoint pos = m->indexOf(d_data->dragWidget);
-	m->subSplitter(pos.y());
+	// indexOf() answers (-1, -1) when the parent does not hold the widget, which
+	// used to be handed straight to the row accessors.
+	const QPoint pos = m->indexOf(d_data->dragWidget);
+	if (pos.y() < 0 || pos.x() < 0)
+		return;
+
 	int count = 0;
 	// count visible widgets
 	for (int i = 0; i < m->subCount(pos.y()); ++i)
@@ -1761,8 +1809,13 @@ void VipDragWidgetSplitter::childEvent(QChildEvent* evt)
 {
 	QSplitter::childEvent(evt);
 
-	if (!qobject_cast<QSplitterHandle*>(evt->child()))
-		emitChildChanged(this, qobject_cast<QWidget*>(evt->child()), evt->added());
+	if (!qobject_cast<QSplitterHandle*>(evt->child())) {
+		// On a removal this runs from the child's destructor, so the pointer is
+		// already partly destroyed and, for a queued receiver, entirely destroyed by
+		// the time it is read. Only an added child is handed out.
+		QWidget* child = evt->added() ? qobject_cast<QWidget*>(evt->child()) : nullptr;
+		emitChildChanged(this, child, evt->added());
+	}
 }
 
 VipDragRubberBand::VipDragRubberBand(QWidget* parent)
@@ -1841,7 +1894,28 @@ public:
 	QPointer<VipBaseDragWidget> lastAdded;
 	bool extra;
 	int maxWidth;
+	// updateContent() is a queued slot that destroys the objects connected to it.
+	bool inUpdateContent{ false };
 };
+
+namespace
+{
+	/// Sets a flag for the lifetime of the scope.
+	class BoolLocker
+	{
+		bool& m_flag;
+
+	public:
+		explicit BoolLocker(bool& flag)
+		  : m_flag(flag)
+		{
+			m_flag = true;
+		}
+		BoolLocker(const BoolLocker&) = delete;
+		BoolLocker& operator=(const BoolLocker&) = delete;
+		~BoolLocker() { m_flag = false; }
+	};
+}
 
 static VipMultiDragWidget::reparent_function _reparent_function;
 static std::function<void(VipMultiDragWidget*)> _on_multi_drag_widget_created;
@@ -2065,7 +2139,11 @@ void VipMultiDragWidget::setInternalVisibility(VisibilityState state)
 
 	// only propagate visibility if there is one child VipBaseDragWidget
 	if (count() == 1) {
-		this->widget(0, 0, 0)->setInternalVisibility(state);
+		// count() walks every cell and every tab, so the only widget is not
+		// necessarily the one at (0, 0, 0): a row inserted above puts it at (1, 0, 0)
+		// and widget(0, 0, 0) then returns null.
+		if (VipBaseDragWidget* w = firstDragWidget())
+			w->setInternalVisibility(state);
 	}
 }
 
@@ -2237,12 +2315,21 @@ QSplitter* VipMultiDragWidget::mainSplitter() const
 
 QSplitter* VipMultiDragWidget::subSplitter(int y) const
 {
+	// QSplitter::widget() returns null out of range, and the last child is the
+	// sentinel, a bare QWidget: both used to be cast to a QSplitter and returned.
+	// indexOf() answers (-1, -1) for a widget it does not hold, and that -1 reached
+	// here.
+	if (y < 0 || y >= mainCount())
+		return nullptr;
 	return static_cast<QSplitter*>(d_data->v_splitter->widget(y));
 }
 
 QTabWidget* VipMultiDragWidget::tabWidget(int y, int x) const
 {
-	return static_cast<QTabWidget*>(subSplitter(y)->widget(x));
+	QSplitter* splitter = subSplitter(y);
+	if (!splitter || x < 0 || x >= splitter->count() - 1)
+		return nullptr;
+	return static_cast<QTabWidget*>(splitter->widget(x));
 }
 
 VipDragWidgetHandle* VipMultiDragWidget::mainSplitterHandle(int y) const
@@ -2356,7 +2443,8 @@ int VipMultiDragWidget::mainCount() const
 
 int VipMultiDragWidget::subCount(int y) const
 {
-	return subSplitter(y)->count() - 1;
+	QSplitter* splitter = subSplitter(y);
+	return splitter ? splitter->count() - 1 : 0;
 }
 
 int VipMultiDragWidget::maxWidth(int* row, int* row_count) const
@@ -2771,22 +2859,38 @@ void VipMultiDragWidget::endRender(VipRenderState& state)
 
 void VipMultiDragWidget::updateContent()
 {
+	// This is a queued slot, and the tab widgets it destroys are the ones whose
+	// currentChanged is connected to it, also queued: a signal already posted
+	// refers to the object being destroyed. It can also be re-entered during a drop
+	// or a load, since removing a tab emits the signal that calls it.
+	if (d_data->inUpdateContent)
+		return;
+	const BoolLocker updating(d_data->inUpdateContent);
+
 	bool content_changed = false;
 	// remove empty tab widget
 	for (int y = 0; y < mainCount(); ++y) {
 		for (int x = 0; x < subCount(y); ++x) {
 
-			if (tabWidget(y, x)->count() == 0) {
-				delete tabWidget(y, x);
-				content_changed = true;
-				--x;
+			if (QTabWidget* tab = tabWidget(y, x)) {
+				if (tab->count() == 0) {
+					// Detached first, then deleted after the queue has drained: an
+					// immediate delete leaves no window for the posted signals.
+					tab->setParent(nullptr);
+					tab->deleteLater();
+					content_changed = true;
+					--x;
+				}
 			}
 		}
 
-		if (subSplitter(y)->count() == 1) {
-			delete subSplitter(y);
-			content_changed = true;
-			--y;
+		if (QSplitter* splitter = subSplitter(y)) {
+			if (splitter->count() == 1) {
+				splitter->setParent(nullptr);
+				splitter->deleteLater();
+				content_changed = true;
+				--y;
+			}
 		}
 	}
 
