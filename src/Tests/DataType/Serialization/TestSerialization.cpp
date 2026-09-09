@@ -10,6 +10,7 @@
 #include <QDir>
 #include <type_traits>
 
+#include "VipCircularVector.h"
 #include "VipIterator.h"
 #include "VipNDArray.h"
 #include "VipLongDouble.h"
@@ -343,6 +344,80 @@ private Q_SLOTS:
 
 			QCOMPARE(it.pos[0], (qsizetype)0);
 			QCOMPARE(it.pos[1], flat);
+		}
+	}
+
+	// -- VipCircularVector ---------------------------------------------------
+
+	/// Inserting at the last position called the front insertion, a copy of the
+	/// line above it, so the element landed at the front instead of where it was
+	/// asked for.
+	void emplaceAtTheEndPutsTheElementAtTheEnd()
+	{
+		VipCircularVector<int> v;
+		for (int i = 0; i < 4; ++i)
+			v.push_back(i); // 0 1 2 3
+
+		v.emplace(v.size() - 1, 99);
+
+		QCOMPARE(v.size(), (qsizetype)5);
+		QCOMPARE(v[0], 0);
+		QCOMPARE(v[3], 99);
+		QCOMPARE(v[4], 3);
+	}
+
+	/// Inserting at the size appends, and an index outside the container is
+	/// refused rather than silently redirected.
+	void emplaceBoundsAreEnforced()
+	{
+		VipCircularVector<int> v;
+		v.push_back(1);
+		v.push_back(2);
+
+		v.emplace(v.size(), 3);
+		QCOMPARE(v.back(), 3);
+
+		bool threw = false;
+		try {
+			v.emplace(-1, 0);
+		}
+		catch (const std::out_of_range&) {
+			threw = true;
+		}
+		QVERIFY2(threw, "a negative position must be refused");
+	}
+
+	/// size_type is signed, so testing only the upper bound let a negative index
+	/// through to the masked indexing, which returns a reference to a slot that was
+	/// never constructed.
+	void atRejectsANegativeIndex()
+	{
+		VipCircularVector<int> v;
+		v.push_back(7);
+
+		bool threw = false;
+		try {
+			(void)v.at(-1);
+		}
+		catch (const std::out_of_range&) {
+			threw = true;
+		}
+		QVERIFY2(threw, "a negative index must throw");
+	}
+
+	/// Appending a container to itself reads a range the growth invalidates.
+	void insertingAContainerIntoItselfKeepsTheValues()
+	{
+		VipCircularVector<int> v;
+		for (int i = 0; i < 4; ++i)
+			v.push_back(i);
+
+		v.insert(v.size(), v.begin(), v.end());
+
+		QCOMPARE(v.size(), (qsizetype)8);
+		for (int i = 0; i < 4; ++i) {
+			QCOMPARE(v[i], i);
+			QCOMPARE(v[i + 4], i);
 		}
 	}
 };

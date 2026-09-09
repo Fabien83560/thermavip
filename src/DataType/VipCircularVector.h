@@ -787,6 +787,10 @@ namespace detail
 			return res;
 		}
 
+		/// Shifts by move assignment. For a type whose move assignment can throw, a
+		/// throw part way leaves the elements between pos and the end in a moved-from
+		/// but valid state, and the container destructible: this is the basic
+		/// guarantee, not the strong one, and nothing rolls the shift back.
 		void move_erase_right_1(int pos) noexcept(std::is_nothrow_move_assignable<T>::value || relocatable)
 		{
 			// starting from pos, move elements toward the end
@@ -1171,6 +1175,24 @@ namespace detail
 /// Like QVector, VipCircularVector never reduces its memory footprint except
 /// when calling shrink_to_fit() or on copy assignment.
 ///
+/// Indexing. Positions are of a SIGNED type, and a negative one is not an offset
+/// from the end: at() throws on it, and the unchecked operator[] is undefined.
+/// Valid positions run from 0 to size() - 1; insertion also accepts size(),
+/// which appends.
+///
+/// Thread safety. Same as the Qt containers: concurrent reads of one instance
+/// are safe, any write is not. The copy on write sharing means two instances
+/// that were copied from one another share a buffer until either is written to,
+/// so writing through one while reading through the other is a data race.
+///
+/// Exceptions. Insertion and growth give the BASIC guarantee: the container
+/// stays valid and destructible, but the elements after the insertion point may
+/// have been moved, and the size may have been reduced to the insertion point.
+/// The STRONG guarantee is not offered for a type whose move assignment can
+/// throw; for a nothrow-movable or relocatable type — which is what this
+/// container is meant for — nothing in the shift can throw and the operation
+/// either completes or does not begin.
+///
 template<class T, Vip::Ownership O = Vip::SharedOwnership>
 class VipCircularVector
 {
@@ -1401,16 +1423,21 @@ public:
 	VIP_ALWAYS_INLINE T& operator[](qsizetype i) noexcept { return d_data->at(i); }
 	VIP_ALWAYS_INLINE const T& operator[](qsizetype i) const noexcept { return d_data->at(i); }
 
+	/// Throws std::out_of_range when @a pos is not a valid index.
+	///
+	/// size_type is signed here, so the upper test alone let a negative index
+	/// through, and the masked indexing that follows then returned a reference to a
+	/// slot that was never constructed.
 	VIP_ALWAYS_INLINE T& at(size_type pos)
 	{
-		if (pos >= size())
-			throw std::out_of_range("");
+		if (pos < 0 || pos >= size())
+			throw std::out_of_range("VipCircularVector::at: index out of range");
 		return (d_data->at(pos));
 	}
 	VIP_ALWAYS_INLINE const T& at(size_type pos) const
 	{
-		if (pos >= size())
-			throw std::out_of_range("");
+		if (pos < 0 || pos >= size())
+			throw std::out_of_range("VipCircularVector::at: index out of range");
 		return (d_data->at(pos));
 	}
 
@@ -1531,10 +1558,15 @@ public:
 	template<class... Args>
 	VIP_ALWAYS_INLINE T& emplace(size_type pos, Args&&... args)
 	{
+		// Inserting at the last position used to call emplace_front, a copy of the
+		// line above it: the element went to the front instead of where it was asked
+		// for. The end case is emplace_back.
+		if (pos < 0 || pos > size())
+			throw std::out_of_range("VipCircularVector::emplace: position out of range");
 		if (pos == 0)
 			return emplace_front(std::forward<Args>(args)...);
-		if (pos == size() - 1)
-			return emplace_front(std::forward<Args>(args)...);
+		if (pos == size())
+			return emplace_back(std::forward<Args>(args)...);
 		if (full())
 			adjust_capacity_for_size(size() + 1);
 		return *d_data->emplace(pos, std::forward<Args>(args)...);
@@ -1548,21 +1580,43 @@ public:
 		emplace(it.pos, std::forward<Args>(args)...);
 		return (iterator)cbegin() + it.pos;
 	}
+	/// Whether [first, last) points inside this container, in which case growing it
+	/// would invalidate the range being read.
+	template<class Iter>
+	bool ownsRange(Iter first, Iter last) const noexcept
+	{
+		if VIP_CONSTEXPR (std::is_same<typename std::decay<Iter>::type, iterator>::value || std::is_same<typename std::decay<Iter>::type, const_iterator>::value) {
+			return !empty() && first != last && first.data == d_data.constData();
+		}
+		else {
+			(void)first;
+			(void)last;
+			return false;
+		}
+	}
+
 	VIP_ALWAYS_INLINE iterator insert(const_iterator it, const T& value) { return emplace(it, value); }
 	VIP_ALWAYS_INLINE iterator insert(const_iterator it, T&& value) { return emplace(it, std::move(value)); }
 
+	/// Inserting a range taken from this same container is supported: the source is
+	/// copied first, since the growth below moves the elements it points at.
 	template<class Iter>
 	void insert(size_type pos, Iter first, Iter last)
 	{
 		detach();
+		if (ownsRange(first, last)) {
+			const std::vector<T> copy(first, last);
+			insert_cat(pos, copy.begin(), copy.end(), std::random_access_iterator_tag());
+			return;
+		}
 		insert_cat(pos, first, last, typename std::iterator_traits<Iter>::iterator_category());
 	}
 	template<class Iter>
 	iterator insert(const_iterator it, Iter first, Iter last)
 	{
-		detach();
-		insert_cat(it.pos, first, last, typename std::iterator_traits<Iter>::iterator_category());
-		return (iterator)cbegin() + it.pos;
+		const size_type pos = it.pos;
+		insert(pos, first, last);
+		return (iterator)cbegin() + pos;
 	}
 	void insert(size_type pos, std::initializer_list<T> ilist) { return insert(pos, ilist.begin(), ilist.end()); }
 	iterator insert(const_iterator pos, std::initializer_list<T> ilist) { return insert(pos, ilist.begin(), ilist.end()); }
