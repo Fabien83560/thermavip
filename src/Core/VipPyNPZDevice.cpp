@@ -45,11 +45,22 @@ VipPyNPZDevice::VipPyNPZDevice(QObject* parent)
 	VIP_CREATE_PRIVATE_DATA();
 }
 
+// A failed write has no return path: close() gives nothing back and the
+// destructor calls it too. It is logged either way, and only reported on the
+// object itself while that object is still whole.
+static void reportWriteFailure(VipIODevice* device, const QString& path, const QString& traceback, bool destroying)
+{
+	VIP_LOG_ERROR("Cannot write " + path + ": " + traceback);
+	if (!destroying)
+		device->setError(traceback);
+}
+
 VipPyNPZDevice::~VipPyNPZDevice()
 {
-	// Qualified: during destruction the override is no longer the one that
-	// writes, so an unqualified call would leave the file unwritten.
-	VipPyNPZDevice::close();
+	// Not close(): a virtual does not dispatch from here, and the wait is kept
+	// short because the destruction usually runs in the thread serving the
+	// interface. The recording is still written.
+	writeRecording(2000, true);
 }
 
 bool VipPyNPZDevice::open(VipIODevice::OpenModes mode)
@@ -122,6 +133,11 @@ void VipPyNPZDevice::apply()
 
 void VipPyNPZDevice::close()
 {
+	writeRecording(10000, false);
+}
+
+void VipPyNPZDevice::writeRecording(int timeout_ms, bool destroying)
+{
 	if (d_data->previous.isEmpty())
 		return;
 	QString dataname = d_data->dataname;
@@ -156,14 +172,14 @@ void VipPyNPZDevice::close()
 	const QString pathvar = "pth" + QString::number((qint64)this);
 	const QString namevar = "nam" + QString::number((qint64)this);
 
-	VipPyError lastError = VipPyInterpreter::instance()->sendObject(pathvar, QVariant::fromValue(file)).value(10000).value<VipPyError>();
+	VipPyError lastError = VipPyInterpreter::instance()->sendObject(pathvar, QVariant::fromValue(file)).value(timeout_ms).value<VipPyError>();
 	if (!lastError.isNull()) {
-		setError(lastError.traceback);
+		reportWriteFailure(this, path(), lastError.traceback, destroying);
 		return;
 	}
-	lastError = VipPyInterpreter::instance()->sendObject(namevar, QVariant::fromValue(dataname)).value(10000).value<VipPyError>();
+	lastError = VipPyInterpreter::instance()->sendObject(namevar, QVariant::fromValue(dataname)).value(timeout_ms).value<VipPyError>();
 	if (!lastError.isNull()) {
-		setError(lastError.traceback);
+		reportWriteFailure(this, path(), lastError.traceback, destroying);
 		return;
 	}
 
@@ -177,12 +193,9 @@ void VipPyNPZDevice::close()
 	d_data->dataname.clear();
 	d_data->previous = VipNDArray();
 
-	lastError = VipPyInterpreter::instance()->execCode(code).value(10000).value<VipPyError>();
+	lastError = VipPyInterpreter::instance()->execCode(code).value(timeout_ms).value<VipPyError>();
 	if (!lastError.isNull()) {
-		// close() returns void and the destructor calls it, so this is the only
-		// place a failed write can be reported at all.
-		VIP_LOG_ERROR("Cannot write " + path() + ": " + lastError.traceback);
-		setError(lastError.traceback);
+		reportWriteFailure(this, path(), lastError.traceback, destroying);
 		return;
 	}
 }
@@ -202,9 +215,10 @@ VipPyMATDevice::VipPyMATDevice(QObject* parent)
 
 VipPyMATDevice::~VipPyMATDevice()
 {
-	// Qualified: during destruction the override is no longer the one that
-	// writes, so an unqualified call would leave the file unwritten.
-	VipPyMATDevice::close();
+	// Not close(): a virtual does not dispatch from here, and the wait is kept
+	// short because the destruction usually runs in the thread serving the
+	// interface. The recording is still written.
+	writeRecording(2000, true);
 }
 
 bool VipPyMATDevice::open(VipIODevice::OpenModes mode)
@@ -276,6 +290,11 @@ void VipPyMATDevice::apply()
 
 void VipPyMATDevice::close()
 {
+	writeRecording(10000, false);
+}
+
+void VipPyMATDevice::writeRecording(int timeout_ms, bool destroying)
+{
 	if (d_data->previous.isEmpty())
 		return;
 	QString dataname = d_data->dataname;
@@ -307,14 +326,14 @@ void VipPyMATDevice::close()
 	const QString pathvar = "pth" + QString::number((qint64)this);
 	const QString namevar = "nam" + QString::number((qint64)this);
 
-	VipPyError lastError = VipPyInterpreter::instance()->sendObject(pathvar, QVariant::fromValue(file)).value(10000).value<VipPyError>();
+	VipPyError lastError = VipPyInterpreter::instance()->sendObject(pathvar, QVariant::fromValue(file)).value(timeout_ms).value<VipPyError>();
 	if (!lastError.isNull()) {
-		setError(lastError.traceback);
+		reportWriteFailure(this, path(), lastError.traceback, destroying);
 		return;
 	}
-	lastError = VipPyInterpreter::instance()->sendObject(namevar, QVariant::fromValue(dataname)).value(10000).value<VipPyError>();
+	lastError = VipPyInterpreter::instance()->sendObject(namevar, QVariant::fromValue(dataname)).value(timeout_ms).value<VipPyError>();
 	if (!lastError.isNull()) {
-		setError(lastError.traceback);
+		reportWriteFailure(this, path(), lastError.traceback, destroying);
 		return;
 	}
 
@@ -330,12 +349,9 @@ void VipPyMATDevice::close()
 	d_data->dataname.clear();
 	d_data->previous = VipNDArray();
 
-	lastError = VipPyInterpreter::instance()->execCode(code).value(10000).value<VipPyError>();
+	lastError = VipPyInterpreter::instance()->execCode(code).value(timeout_ms).value<VipPyError>();
 	if (!lastError.isNull()) {
-		// close() returns void and the destructor calls it, so this is the only
-		// place a failed write can be reported at all.
-		VIP_LOG_ERROR("Cannot write " + path() + ": " + lastError.traceback);
-		setError(lastError.traceback);
+		reportWriteFailure(this, path(), lastError.traceback, destroying);
 		return;
 	}
 }

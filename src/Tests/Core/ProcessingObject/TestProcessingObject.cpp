@@ -11,6 +11,7 @@
 #include "VipProcessingObject.h"
 #include "VipImageProcessing.h"
 #include "VipStandardProcessing.h"
+#include "VipStreamingFromDevice.h"
 #include "VipXmlArchive.h"
 
 #include <atomic>
@@ -872,6 +873,24 @@ private Q_SLOTS:
 		QVERIFY2(flagged, "the object must know it is being destroyed");
 		QVERIFY2(!accepted, "no work may be submitted once destruction has started");
 		Q_UNUSED(applied);
+	}
+
+	/// The setter says it takes ownership of the device. Refusing it once the
+	/// object is open used to leave it neither stored nor destroyed, and the
+	/// caller had already let go of it.
+	void aRefusedDeviceIsStillDestroyed()
+	{
+		VipStreamingFromDevice streaming;
+		VipAnyResource* inner = new VipAnyResource();
+		inner->setData(QVariant(1.0));
+		streaming.setIODevice(inner);
+		QVERIFY(streaming.open(VipIODevice::ReadOnly));
+
+		QPointer<VipIODevice> observed = new VipAnyResource();
+		streaming.setIODevice(observed);
+
+		QVERIFY2(observed.isNull(), "a device that is taken but not kept must be destroyed");
+		QCOMPARE(streaming.IODevice(), (VipIODevice*)inner);
 	}
 };
 

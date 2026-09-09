@@ -89,15 +89,35 @@ QVariant VipPySignalGenerator::computeValue(qint64 time, bool& ok)
 	cmds << vipCExecCode(m_code, "code");
 	cmds << vipCRetrieveObject("value");
 
-	QVariant value = VipPyInterpreter::instance()->sendCommands(cmds).value(4000);
+	// Three outcomes, not one. An interpreter that is absent, closed, or that
+	// failed to start gives a null future, whose value is an empty variant: that
+	// is not an error object, so it used to pass for a success and the device
+	// opened and published nothing.
+	const VipPyFuture future = VipPyInterpreter::instance()->sendCommands(cmds);
+	if (future.isNull()) {
+		setError("Python interpreter is not available", VipProcessingObject::WrongInput);
+		ok = false;
+		return QVariant();
+	}
+
+	const QVariant value = future.value(4000);
 	if (value.userType() == qMetaTypeId<VipPyError>()) {
 		setError(value.value<VipPyError>().traceback);
 		ok = false;
 		return QVariant();
 	}
 
+	// value() and contains(), not operator[]: the non const one inserts a default
+	// built entry when the key is missing, and reported it as a result.
+	const QVariantMap result = value.value<QVariantMap>();
+	if (!result.contains("value")) {
+		setError("the Python code did not define the 'value' variable", VipProcessingObject::WrongInput);
+		ok = false;
+		return QVariant();
+	}
+
 	ok = true;
-	return value.value<QVariantMap>()["value"];
+	return result.value("value");
 }
 
 bool VipPySignalGenerator::open(VipIODevice::OpenModes mode)
