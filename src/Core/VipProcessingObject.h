@@ -350,9 +350,11 @@ private:
 ///
 class VIP_CORE_EXPORT VipDataList
 {
-	int m_max_size;
-	qint64 m_max_memory;
-	int m_data_limit_type;
+	// Written from the thread that configures, read from the thread that fills the
+	// buffer, and the setters below are plain assignments under no lock at all.
+	std::atomic<int> m_max_size;
+	std::atomic<qint64> m_max_memory;
+	std::atomic<int> m_data_limit_type;
 
 public:
 	/// The type of VipDataList
@@ -414,19 +416,19 @@ public:
 	virtual qint64 memoryFootprint() const = 0;
 
 	/// Set the maximum list size
-	void setMaxListSize(int size) { m_max_size = size; }
+	void setMaxListSize(int size) { m_max_size.store(size, std::memory_order_relaxed); }
 	/// Set the maximum list memory footprint
-	void setMaxListMemory(qint64 memory) { m_max_memory = memory; }
+	void setMaxListMemory(qint64 memory) { m_max_memory.store(memory, std::memory_order_relaxed); }
 
 	/// Set the list limit type (combination of Number and MemorySize, or None)
-	void setListLimitType(int type) { m_data_limit_type = type; }
+	void setListLimitType(int type) { m_data_limit_type.store(type, std::memory_order_relaxed); }
 	/// Returns the list limit type
-	int listLimitType() const { return m_data_limit_type; }
+	int listLimitType() const { return m_data_limit_type.load(std::memory_order_relaxed); }
 
 	/// Returns the maximum list size
-	int maxListSize() const { return m_max_size; }
+	int maxListSize() const { return m_max_size.load(std::memory_order_relaxed); }
 	/// Returns the maximum list memory footprint in bytes
-	qint64 maxListMemory() const { return m_max_memory; }
+	qint64 maxListMemory() const { return m_max_memory.load(std::memory_order_relaxed); }
 };
 
 /// @brief A FIFO, thread safe VipDataList

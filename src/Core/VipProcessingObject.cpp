@@ -1195,20 +1195,27 @@ VipProcessingManager::~VipProcessingManager() {}
 
 void VipProcessingManager::setDefaultPriority(QThread::Priority priority, const QMetaObject* meta)
 {
-	instance().d_data->priorities[meta->className()] = priority;
+	{
+		QMutexLocker lock(&instance().d_data->mutex);
+		instance().d_data->priorities[meta->className()] = priority;
+	}
 	applyAll();
 	Q_EMIT instance().changed();
 }
 int VipProcessingManager::defaultPriority(const QMetaObject* meta)
 {
-	PriorityMap::iterator it = instance().d_data->priorities.find(meta->className());
-	if (it != instance().d_data->priorities.end())
+	QMutexLocker lock(&instance().d_data->mutex);
+	PriorityMap::const_iterator it = instance().d_data->priorities.constFind(meta->className());
+	if (it != instance().d_data->priorities.constEnd())
 		return it.value();
 	return QThread::InheritPriority;
 }
 void VipProcessingManager::setDefaultPriorities(const PriorityMap& prio)
 {
-	instance().d_data->priorities = prio;
+	{
+		QMutexLocker lock(&instance().d_data->mutex);
+		instance().d_data->priorities = prio;
+	}
 	applyAll();
 	Q_EMIT instance().changed();
 }
@@ -1231,48 +1238,73 @@ static QThread::Priority findPriority(const PriorityMap& prio, VipProcessingObje
 
 void VipProcessingManager::applyAll()
 {
-	QList<VipDataList*> all = instance().d_data->instances;
+	// The lock is taken here, to read the registers and the defaults, and released
+	// before any of the objects below is touched: this function calls into other
+	// objects and emits, and holding the mutex across that invites an inversion
+	// with whatever lock those objects take. The callers no longer hold it.
+	QList<VipDataList*> all;
+	QList<VipProcessingObject*> procs;
+	int previous_limit_type, previous_max_size, limit_type, max_size;
+	qint64 previous_max_memory, max_memory;
+	ErrorCodes previous_errors, errors;
+	PriorityMap priorities;
+	{
+		QMutexLocker lock(&instance().d_data->mutex);
+		all = instance().d_data->instances;
+		procs = instance().d_data->processingInstances;
+		previous_limit_type = instance().d_data->_list_limit_type;
+		previous_max_size = instance().d_data->_max_list_size;
+		previous_max_memory = instance().d_data->_max_list_memory;
+		previous_errors = instance().d_data->_log_errors;
+		limit_type = instance().d_data->list_limit_type;
+		max_size = instance().d_data->max_list_size;
+		max_memory = instance().d_data->max_list_memory;
+		errors = instance().d_data->errors;
+		priorities = instance().d_data->priorities;
+	}
+
 	for (int i = 0; i < all.size(); ++i) {
 		// only apply the parameters if they are the default ones
 		VipDataList* lst = all[i];
-		if (lst->listLimitType() == instance().d_data->_list_limit_type && lst->maxListSize() == instance().d_data->_max_list_size &&
-		    lst->maxListMemory() == instance().d_data->_max_list_memory) {
-			all[i]->setListLimitType(instance().d_data->list_limit_type);
-			all[i]->setMaxListSize(instance().d_data->max_list_size);
-			all[i]->setMaxListMemory(instance().d_data->max_list_memory);
+		if (lst->listLimitType() == previous_limit_type && lst->maxListSize() == previous_max_size && lst->maxListMemory() == previous_max_memory) {
+			all[i]->setListLimitType(limit_type);
+			all[i]->setMaxListSize(max_size);
+			all[i]->setMaxListMemory(max_memory);
 		}
 	}
 
-	QList<VipProcessingObject*> procs = instance().d_data->processingInstances;
 	for (int i = 0; i < procs.size(); ++i) {
 		// only apply the parameters if they are the default ones
 		VipProcessingObject* proc = procs[i];
 		if (proc->isBeingDestroyed())
 			continue;
-		if (proc->logErrors() == VipProcessingManager::instance().d_data->_log_errors) {
-			proc->setLogErrors(instance().d_data->errors);
+		if (proc->logErrors() == previous_errors) {
+			proc->setLogErrors(errors);
 		}
 
 		// set priority
 		if (proc->priority() == QThread::InheritPriority) {
-			proc->setPriority(findPriority(instance().d_data->priorities, proc));
+			proc->setPriority(findPriority(priorities, proc));
 		}
 	}
 
-	VipProcessingManager::instance().d_data->_log_errors = instance().d_data->errors;
-	VipProcessingManager::instance().d_data->_list_limit_type = instance().d_data->list_limit_type;
-	VipProcessingManager::instance().d_data->_max_list_size = instance().d_data->max_list_size;
-	VipProcessingManager::instance().d_data->_max_list_memory = instance().d_data->max_list_memory;
+	QMutexLocker lock(&instance().d_data->mutex);
+	instance().d_data->_log_errors = errors;
+	instance().d_data->_list_limit_type = limit_type;
+	instance().d_data->_max_list_size = max_size;
+	instance().d_data->_max_list_memory = max_memory;
 }
 
 void VipProcessingManager::setLogErrorEnabled(int error_code, bool enable)
 {
-	QMutexLocker lock(&instance().d_data->mutex);
-	if (enable) {
-		instance().d_data->errors.insert(error_code);
-	}
-	else {
-		instance().d_data->errors.remove(error_code);
+	{
+		QMutexLocker lock(&instance().d_data->mutex);
+		if (enable) {
+			instance().d_data->errors.insert(error_code);
+		}
+		else {
+			instance().d_data->errors.remove(error_code);
+		}
 	}
 	Q_EMIT instance().changed();
 }
@@ -1286,25 +1318,31 @@ bool VipProcessingManager::isLogErrorEnabled(int error)
 
 void VipProcessingManager::setLogErrors(const QSet<int>& errors)
 {
-	QMutexLocker lock(&instance().d_data->mutex);
+	{
+		QMutexLocker lock(&instance().d_data->mutex);
 
-	if (errors.contains(0)) {
-		// Patch (3.10.0): handle the old AllErrorsExcept (value 0)
-		QSet<int> errs = errors;
-		errs.remove(0);
-		instance().d_data->errors.clear();
-		instance().d_data->errors << VipProcessingObject::RuntimeError << VipProcessingObject::WrongInput << VipProcessingObject::InputBufferFull << VipProcessingObject::WrongInputNumber
-					  << VipProcessingObject::ConnectionNotOpen << VipProcessingObject::DeviceNotOpen << VipProcessingObject::IOError;
-		for (auto it = errs.begin(); it != errs.end(); ++it)
-			instance().d_data->errors.remove(*it);
+		if (errors.contains(0)) {
+			// Patch (3.10.0): handle the old AllErrorsExcept (value 0)
+			QSet<int> errs = errors;
+			errs.remove(0);
+			instance().d_data->errors.clear();
+			instance().d_data->errors << VipProcessingObject::RuntimeError << VipProcessingObject::WrongInput << VipProcessingObject::InputBufferFull
+						  << VipProcessingObject::WrongInputNumber << VipProcessingObject::ConnectionNotOpen << VipProcessingObject::DeviceNotOpen
+						  << VipProcessingObject::IOError;
+			for (auto it = errs.begin(); it != errs.end(); ++it)
+				instance().d_data->errors.remove(*it);
+		}
+		else
+			instance().d_data->errors = errors;
 	}
-	else
-		instance().d_data->errors = errors;
+	// Outside the lock: a receiver of this signal may well come back into the
+	// manager.
 	Q_EMIT instance().changed();
 }
 
 QSet<int> VipProcessingManager::logErrors()
 {
+	QMutexLocker lock(&instance().d_data->mutex);
 	return instance().d_data->errors;
 }
 
@@ -1316,38 +1354,47 @@ void VipProcessingManager::setLocked(bool locked)
 
 void VipProcessingManager::setListLimitType(int type)
 {
-	QMutexLocker lock(&instance().d_data->mutex);
-	instance().d_data->list_limit_type = type;
+	{
+		QMutexLocker lock(&instance().d_data->mutex);
+		instance().d_data->list_limit_type = type;
+	}
 	applyAll();
 	Q_EMIT instance().changed();
 }
 
 void VipProcessingManager::setMaxListSize(int size)
 {
-	QMutexLocker lock(&instance().d_data->mutex);
-	instance().d_data->max_list_size = size;
+	{
+		QMutexLocker lock(&instance().d_data->mutex);
+		instance().d_data->max_list_size = size;
+	}
 	applyAll();
 	Q_EMIT instance().changed();
 }
 
 void VipProcessingManager::setMaxListMemory(qint64 size)
 {
-	QMutexLocker lock(&instance().d_data->mutex);
-	instance().d_data->max_list_memory = size;
+	{
+		QMutexLocker lock(&instance().d_data->mutex);
+		instance().d_data->max_list_memory = size;
+	}
 	applyAll();
 	Q_EMIT instance().changed();
 }
 
 int VipProcessingManager::listLimitType()
 {
+	QMutexLocker lock(&instance().d_data->mutex);
 	return instance().d_data->list_limit_type;
 }
 int VipProcessingManager::maxListSize()
 {
+	QMutexLocker lock(&instance().d_data->mutex);
 	return instance().d_data->max_list_size;
 }
 qint64 VipProcessingManager::maxListMemory()
 {
+	QMutexLocker lock(&instance().d_data->mutex);
 	return instance().d_data->max_list_memory;
 }
 
@@ -3790,8 +3837,13 @@ void VipProcessingObject::receiveDataSent(VipProcessingIO* io, const VipAnyData&
 	Q_EMIT dataSent(io, data);
 }
 
+// The set of codes to log is written from the thread that configures and read
+// from the thread that processes, and a QSet is not thread safe: a read during a
+// rehash walks a table being rebuilt. The lock that already protects the error
+// buffer covers it now; it stopped one member short.
 void VipProcessingObject::setLogErrorEnabled(int error_code, bool enable)
 {
+	SPIN_LOCK(d_data->error_mutex);
 	if (enable) {
 		d_data->logErrors.insert(error_code);
 	}
@@ -3801,21 +3853,26 @@ void VipProcessingObject::setLogErrorEnabled(int error_code, bool enable)
 }
 bool VipProcessingObject::isLogErrorEnabled(int error) const
 {
+	SPIN_LOCK(d_data->error_mutex);
 	bool found = (d_data->logErrors.find(error) != d_data->logErrors.end());
 	return found;
 }
 
 void VipProcessingObject::setLogErrors(const QSet<int>& errors)
 {
+	SPIN_LOCK(d_data->error_mutex);
 	d_data->logErrors = errors;
 }
 QSet<int> VipProcessingObject::logErrors() const
 {
+	SPIN_LOCK(d_data->error_mutex);
 	return d_data->logErrors;
 }
 
 void VipProcessingObject::newError(const VipErrorData& error)
 {
+	// Read through the accessor, which takes the lock: the buffer below is
+	// protected two lines later, the set was not.
 	if (isLogErrorEnabled(error.errorCode())) {
 		VIP_LOG_ERROR("(" + vipSplitClassname(this->objectName()) + ") " + error.errorString());
 	}

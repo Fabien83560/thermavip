@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <memory>
+#include <QThread>
 
 // ---------------------------------------------------------------------------
 // Test processings, kept to the strict minimum.
@@ -922,6 +923,45 @@ private Q_SLOTS:
 
 		QVERIFY(processing.update(true));
 		QCOMPARE(depth, 2);
+	}
+
+	/// The manager is read from the thread that processes and written from the
+	/// thread that configures. The set of error codes and the map of priorities
+	/// were read without the mutex that guards the writes, and a Qt container
+	/// being rehashed is not readable. This exercises both sides at once.
+	void theManagerSurvivesConcurrentConfiguration()
+	{
+		const QSet<int> initial = VipProcessingManager::logErrors();
+		const qint64 initialMemory = VipProcessingManager::maxListMemory();
+
+		std::atomic<bool> stop{ false };
+		std::atomic<int> reads{ 0 };
+
+		QThread* reader = QThread::create([&]() {
+			while (!stop.load()) {
+				VipProcessingManager::logErrors();
+				VipProcessingManager::defaultPriorities();
+				VipProcessingManager::maxListMemory();
+				VipProcessingManager::listLimitType();
+				++reads;
+			}
+		});
+		reader->start();
+
+		for (int i = 0; i < 200; ++i) {
+			VipProcessingManager::setLogErrorEnabled(VipProcessingObject::RuntimeError, i % 2 == 0);
+			VipProcessingManager::setMaxListMemory(40000000 + i);
+		}
+
+		stop.store(true);
+		QVERIFY(reader->wait(30000));
+		delete reader;
+
+		QVERIFY2(reads.load() > 0, "the reader must have run");
+
+		VipProcessingManager::setLogErrors(initial);
+		VipProcessingManager::setMaxListMemory(initialMemory);
+		QCOMPARE(VipProcessingManager::maxListMemory(), initialMemory);
 	}
 };
 
