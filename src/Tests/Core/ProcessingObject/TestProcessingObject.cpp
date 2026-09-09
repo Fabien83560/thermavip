@@ -9,6 +9,7 @@
 #include "vip_test_main.h"
 
 #include "VipProcessingObject.h"
+#include "VipProcessingSnapshot.h"
 #include "VipImageProcessing.h"
 #include "VipStandardProcessing.h"
 #include "VipStreamingFromDevice.h"
@@ -1265,6 +1266,55 @@ private Q_SLOTS:
 
 		for (QMap<const VipProcessingObject*, int>::const_iterator it = before.begin(); it != before.end(); ++it)
 			QCOMPARE(it.key()->topLevelInputAt(0)->toMultiInput()->count(), it.value());
+	}
+
+	/// The snapshot is documented as something one side fills in real time while
+	/// the other displays it, and its accessors are part of a family the base
+	/// class declares thread safe. They read maps and a structure the loader
+	/// writes, and neither side took a lock. Meant to be run under a sanitiser.
+	void readingASnapshotWhileItIsLoadedIsSafe()
+	{
+		VipProcessingPool source;
+		MultiplyByProperty* origin = new MultiplyByProperty(&source);
+		origin->setObjectName("multiply");
+
+		const QByteArray snapshot = vipSaveBinarySnapshot(&source);
+		QVERIFY(!snapshot.isEmpty());
+
+		VipProcessingPool target;
+		QVERIFY(vipLoadBinarySnapshot(&target, snapshot));
+
+		const QList<VipProcessingObject*> loaded = target.findChildren<VipProcessingObject*>();
+		QVERIFY2(!loaded.isEmpty(), "the snapshot must have created a processing");
+
+		std::atomic<bool> stop{ false };
+		std::atomic<int> reads{ 0 };
+		QThread* reader = QThread::create([&]() {
+			while (!stop.load()) {
+				for (VipProcessingObject* obj : loaded) {
+					obj->inputDescription("input");
+					obj->outputDescription("output");
+					obj->info();
+					obj->processingTime();
+					++reads;
+				}
+			}
+		});
+		reader->start();
+
+		QElapsedTimer started;
+		started.start();
+		while (reads.load() == 0 && started.elapsed() < 30000)
+			QThread::msleep(1);
+
+		for (int i = 0; i < 300; ++i)
+			QVERIFY(vipLoadBinarySnapshot(&target, snapshot));
+
+		stop.store(true);
+		QVERIFY(reader->wait(30000));
+		delete reader;
+
+		QVERIFY2(reads.load() > 0, "the reader must have run");
 	}
 };
 
