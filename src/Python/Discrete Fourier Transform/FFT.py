@@ -36,6 +36,11 @@ class ThermavipFFT(th.ThermavipPyProcessing):
             res =fftp.fftn(data)
         return res
         
+    def unit(self, index, name):
+        # A transform changes the quantity: the abscissa was left labelled with the
+        # unit of the input, and the ordinate too.
+        return 'Frequency [Hz]' if index == 0 else name + '.s'
+
     def parameters(self):
         return {}
 
@@ -62,14 +67,23 @@ class ThermavipIFFT(th.ThermavipPyProcessing):
     def apply(self, data, time):
         
         
+        # The real part, not the modulus. The docstring says a forward transform
+        # followed by this one returns the original signal; the modulus folds every
+        # negative sample onto its opposite, so a signal crossing zero came back
+        # rectified and the round trip was not one.
         if len(data.shape) == 1:
-            res = np.absolute(fftp.ifft(data))
+            res = np.real(fftp.ifft(data))
         elif len(data.shape) == 2:
-            res = np.absolute(fftp.ifft2(data))
+            res = np.real(fftp.ifft2(data))
         else:
-            res = np.absolute(fftp.ifftn(data))
+            res = np.real(fftp.ifftn(data))
         return res
         
+    def unit(self, index, name):
+        # A transform changes the quantity: the abscissa was left labelled with the
+        # unit of the input, and the ordinate too.
+        return 'Time [s]' if index == 0 else name + '.s'
+
     def parameters(self):
         return {}
 
@@ -99,6 +113,11 @@ class ThermavipRFFT(th.ThermavipPyProcessing):
             res =fftp.rfftn(data)  
         return res
         
+    def unit(self, index, name):
+        # A transform changes the quantity: the abscissa was left labelled with the
+        # unit of the input, and the ordinate too.
+        return 'Frequency [Hz]' if index == 0 else name + '.s'
+
     def parameters(self):
         return {}
 
@@ -124,14 +143,21 @@ class ThermavipIRFFT(th.ThermavipPyProcessing):
     def apply(self, data, time):
         
         
+        # irfft already returns a real array, so taking the modulus was not only
+        # wrong but redundant: it rectified the result.
         if len(data.shape) == 1:
-            res = np.absolute(fftp.irfft(data))
+            res = fftp.irfft(data)
         elif len(data.shape) == 2:
-            res = np.absolute(fftp.irfft2(data))
+            res = fftp.irfft2(data)
         else:
-            res = np.absolute(fftp.irfftn(data))
+            res = fftp.irfftn(data)
         return res
         
+    def unit(self, index, name):
+        # A transform changes the quantity: the abscissa was left labelled with the
+        # unit of the input, and the ordinate too.
+        return 'Time [s]' if index == 0 else name + '.s'
+
     def parameters(self):
         return {}
 

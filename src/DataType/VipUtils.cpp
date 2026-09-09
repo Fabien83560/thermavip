@@ -540,6 +540,24 @@ QDataStream& operator>>(QDataStream& stream, VipNDArray& ar)
 	return stream;
 }
 
+// An element count read from a stream cannot size a container on its own: the
+// elements have not been read yet, and nothing in the format bounds the count.
+// A count larger than what the stream still holds is not readable, whatever the
+// element size.
+static bool vipReadVectorSize(QDataStream& s, qsizetype& size)
+{
+	size = 0;
+	s >> size;
+	if (s.status() != QDataStream::Ok)
+		return false;
+	if (size < 0 || (s.device() && !s.device()->isSequential() && size > s.device()->bytesAvailable())) {
+		s.setStatus(QDataStream::ReadCorruptData);
+		size = 0;
+		return false;
+	}
+	return true;
+}
+
 QDataStream& operator<<(QDataStream& s, const VipPointVector& c)
 {
 	s << c.size();
@@ -549,15 +567,18 @@ QDataStream& operator<<(QDataStream& s, const VipPointVector& c)
 }
 QDataStream& operator>>(QDataStream& s, VipPointVector& c)
 {
-	qsizetype size;
-	s >> size;
+	qsizetype size = 0;
+	if (!vipReadVectorSize(s, size))
+		return s;
 	c.resize(size);
 
-	unsigned LD_support = s.device()->property("_vip_LD").toUInt();
-	for (qsizetype i = 0; i < size; ++i) {
+	unsigned LD_support = s.device() ? s.device()->property("_vip_LD").toUInt() : 0u;
+	for (qsizetype i = 0; i < size && s.status() == QDataStream::Ok; ++i) {
 		c[i].rx() = vipReadLEDouble(LD_support, s);
 		c[i].ry() = vipReadLEDouble(LD_support, s);
 	}
+	if (s.status() != QDataStream::Ok)
+		c.clear();
 	return s;
 }
 
@@ -570,15 +591,18 @@ QDataStream& operator<<(QDataStream& s, const VipComplexPointVector& c)
 }
 QDataStream& operator>>(QDataStream& s, VipComplexPointVector& c)
 {
-	qsizetype size;
-	s >> size;
+	qsizetype size = 0;
+	if (!vipReadVectorSize(s, size))
+		return s;
 	c.resize(size);
 
-	unsigned LD_support = s.device()->property("_vip_LD").toUInt();
-	for (qsizetype i = 0; i < size; ++i) {
+	unsigned LD_support = s.device() ? s.device()->property("_vip_LD").toUInt() : 0u;
+	for (qsizetype i = 0; i < size && s.status() == QDataStream::Ok; ++i) {
 		c[i].rx() = vipReadLEDouble(LD_support, s);
 		s >> c[i].ry();
 	}
+	if (s.status() != QDataStream::Ok)
+		c.clear();
 	return s;
 }
 
@@ -591,16 +615,19 @@ QDataStream& operator<<(QDataStream& s, const VipIntervalSampleVector& c)
 }
 QDataStream& operator>>(QDataStream& s, VipIntervalSampleVector& c)
 {
-	qsizetype size;
-	s >> size;
+	qsizetype size = 0;
+	if (!vipReadVectorSize(s, size))
+		return s;
 	c.resize(size);
 
-	unsigned LD_support = s.device()->property("_vip_LD").toUInt();
-	for (qsizetype i = 0; i < size; ++i) {
+	unsigned LD_support = s.device() ? s.device()->property("_vip_LD").toUInt() : 0u;
+	for (qsizetype i = 0; i < size && s.status() == QDataStream::Ok; ++i) {
 		c[i].interval.setMinValue(vipReadLEDouble(LD_support, s));
 		c[i].interval.setMaxValue(vipReadLEDouble(LD_support, s));
 		c[i].value = (vipReadLEDouble(LD_support, s));
 	}
+	if (s.status() != QDataStream::Ok)
+		c.clear();
 	return s;
 }
 

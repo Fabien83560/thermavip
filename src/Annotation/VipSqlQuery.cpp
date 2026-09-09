@@ -38,6 +38,9 @@
 
 #include <qsettings.h>
 #include <qsqldatabase.h>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <qsqldriver.h>
 #include <qsqlerror.h>
 #include <qsqlquery.h>
 #include <QStandardPaths>
@@ -143,6 +146,12 @@ struct DB
 	QString sqlite_file;
 	QString local_movie_folder;
 	QString local_movie_suffix;
+	// Transport security. Read from the same file as the rest, empty by default so
+	// that an existing deployment keeps working; a site that wants TLS sets
+	// MYSQL_SSL_MODE, and MYSQL_SSL_CA when it also wants the server identity
+	// checked against its own authority.
+	QString ssl_mode;
+	QString ssl_ca;
 };
 
 static QString removeQuote(const QString& line)
@@ -207,6 +216,8 @@ const DB& readDB()
 				db.sqlite_file = removeQuote(settings.value("SQLITE_DATABASE_FILE").toString());
 				db.local_movie_folder = removeQuote(settings.value("LOCAL_MOVIE_FOLDER").toString());
 				db.local_movie_suffix = removeQuote(settings.value("LOCAL_MOVIE_SUFFIX").toString());
+				db.ssl_mode = removeQuote(settings.value("MYSQL_SSL_MODE").toString());
+				db.ssl_ca = removeQuote(settings.value("MYSQL_SSL_CA").toString());
 				db.local_movie_folder.replace("\\", "/");
 				if (db.local_movie_folder.endsWith("/"))
 					db.local_movie_folder = db.local_movie_folder.mid(0, db.local_movie_folder.size() - 1);
@@ -280,7 +291,16 @@ static QSqlDatabase createConnection(const DB & param, bool reset = false)
 		//QSqlDatabase::removeDatabase("in_mem_db");
 
 		//db = QSqlDatabase::addDatabase("QMYSQL", "mysql_database");
-		db.setConnectOptions("MYSQL_OPT_CONNECT_TIMEOUT=36000;MYSQL_OPT_READ_TIMEOUT=100;MYSQL_OPT_WRITE_TIMEOUT=100;");
+		QString opts = "MYSQL_OPT_CONNECT_TIMEOUT=36000;MYSQL_OPT_READ_TIMEOUT=100;MYSQL_OPT_WRITE_TIMEOUT=100;";
+		// Nothing in the project asked for TLS, so credentials and query results
+		// crossed the network in the clear whatever the server supported.
+		if (!param.ssl_mode.isEmpty())
+			opts += "MYSQL_OPT_SSL_MODE=" + param.ssl_mode + ";";
+		if (!param.ssl_ca.isEmpty())
+			opts += "MYSQL_OPT_SSL_CA=" + param.ssl_ca + ";";
+		else if (param.ssl_mode.isEmpty())
+			VIP_LOG_WARNING("Database connection without transport security: set MYSQL_SSL_MODE to enable it");
+		db.setConnectOptions(opts);
 		//db.setConnectOptions("MYSQL_OPT_READ_TIMEOUT=100");
 		//db.setConnectOptions("MYSQL_OPT_WRITE_TIMEOUT=100");
 		//db.setConnectOptions("MYSQL_OPT_RECONNECT=1");
@@ -323,6 +343,29 @@ bool vipCreateSQLConnection(const QString& hostname, int port, const QString& db
 	db.password = password;
 	globalDB().close();
 	return createConnection(db,true).isOpen();
+}
+
+// Same as below, with bound values. Free-text criteria must never be pasted
+// into the statement: a single apostrophe used to break the query, and a
+// crafted one could append a UNION.
+static QSqlQuery execQuery(QSqlDatabase& db, const QString& query, const QVariantList& binds, int trial = 0)
+{
+	QSqlQuery q(db);
+	q.prepare(query);
+	for (const QVariant& v : binds)
+		q.addBindValue(v);
+	q.exec();
+
+	if (q.lastError().isValid()) {
+		if (trial == 0) {
+			reconnectDB(true);
+			return execQuery(db, query, binds, ++trial);
+		}
+		VIP_LOG_ERROR(q.lastError().nativeErrorCode());
+		VIP_LOG_ERROR(q.lastError().databaseText());
+		VIP_LOG_ERROR(q.lastError().text());
+	}
+	return q;
 }
 
 static QSqlQuery execQuery( QSqlDatabase& db, const QString& query, int trial = 0)
@@ -617,11 +660,63 @@ static void convertShape(const VipShape& sh, QPolygon& p, QRect& r)
 	}
 }
 
+// Depth of the transaction opened through this file. Everything here shares one
+// connection, and a transaction cannot be nested, so an inner scope must not
+// open a second one.
+static int _vip_transaction_depth = 0;
+
+namespace
+{
+	/// Opens a transaction unless one is already open, and rolls back unless
+	/// commit() was called.
+	class DBTransaction
+	{
+		QSqlDatabase m_db;
+		bool m_owner{ false };
+
+	public:
+		explicit DBTransaction(const QSqlDatabase& db)
+		  : m_db(db)
+		{
+			if (_vip_transaction_depth == 0 && m_db.isOpen() && m_db.driver() && m_db.driver()->hasFeature(QSqlDriver::Transactions) && m_db.transaction())
+				m_owner = true;
+			if (m_owner)
+				++_vip_transaction_depth;
+		}
+		DBTransaction(const DBTransaction&) = delete;
+		DBTransaction& operator=(const DBTransaction&) = delete;
+		~DBTransaction()
+		{
+			if (m_owner) {
+				m_db.rollback();
+				--_vip_transaction_depth;
+			}
+		}
+		bool commit()
+		{
+			if (!m_owner)
+				return true;
+			m_owner = false;
+			--_vip_transaction_depth;
+			if (m_db.commit())
+				return true;
+			VIP_LOG_ERROR("Cannot commit to the database: " + m_db.lastError().text());
+			m_db.rollback();
+			return false;
+		}
+	};
+}
+
 QList<qint64> vipSendToDB(const QString& userName, const QString& camera, const QString& device, Vip_experiment_id pulse, const Vip_event_list& all_shapes, VipProgress* p)
 {
 	QSqlDatabase db = createConnection();
 	if (!db.isOpen())
 		return QList<qint64>();
+
+	// Each event is one row in thermal_events and then its rows in
+	// thermal_events_instances. A failure between the two left an event with no
+	// instance: invisible to any view that joins them, but present and counted.
+	DBTransaction transaction(db);
 
 	Vip_event_list shapes = all_shapes;
 	/* for (qsizetype i = 0; i < lst.size(); ++i)
@@ -694,31 +789,32 @@ QList<qint64> vipSendToDB(const QString& userName, const QString& camera, const 
 		it.value().first().setAttribute("max_temperature_C", max_t);
 
 		// send to thermal_events
-		QString query = QString("INSERT IGNORE INTO `thermal_events` (`experiment_id`,`line_of_sight`,`device`,`initial_timestamp_ns`,`final_timestamp_ns`,"
-					"`duration_ns`,`category`,`is_automatic_detection`,`max_temperature_C`,`max_T_timestamp_ns`,`method`,`confidence`,"
-					"`user`,`comments`,`dataset`,`name`,  `analysis_status`) \n"
-					"VALUES\n"
-					"('%1','%2','%3',%4,%5,%6,'%7',%8,%9,%10,'%11',%12,'%13','%14','%15','%16','%17');")
-				  .arg(QString::number(pulse))
-				  .arg(camera)
-				  .arg(device)
-				  .arg(min)
-				  .arg(max)
-				  .arg(max - min)
-				  .arg(thermal_event)
-				  .arg(is_automatic_detection)
-				  .arg(max_t)
-				  .arg(max_T_timestamp_ns)
-				  .arg(method)
-				  .arg(confidence)
-				  .arg(userName)
-				  .arg(comment)
-				  .arg(dataset)
-				  .arg(name)
-				  .arg(analysis_status);
-
+		// Bound values, not interpolation: comments, name, dataset and the other
+		// free-text columns come from the user interface, and an apostrophe alone
+		// used to break the statement.
 		QSqlQuery q(db);
-		bool res = q.exec(query);
+		q.prepare(QStringLiteral("INSERT IGNORE INTO `thermal_events` (`experiment_id`,`line_of_sight`,`device`,`initial_timestamp_ns`,`final_timestamp_ns`,"
+					 "`duration_ns`,`category`,`is_automatic_detection`,`max_temperature_C`,`max_T_timestamp_ns`,`method`,`confidence`,"
+					 "`user`,`comments`,`dataset`,`name`,`analysis_status`) "
+					 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
+		q.addBindValue(pulse);
+		q.addBindValue(camera);
+		q.addBindValue(device);
+		q.addBindValue(min);
+		q.addBindValue(max);
+		q.addBindValue(max - min);
+		q.addBindValue(thermal_event);
+		q.addBindValue(is_automatic_detection);
+		q.addBindValue(max_t);
+		q.addBindValue(max_T_timestamp_ns);
+		q.addBindValue(method);
+		q.addBindValue(confidence);
+		q.addBindValue(userName);
+		q.addBindValue(comment);
+		q.addBindValue(dataset);
+		q.addBindValue(name);
+		q.addBindValue(analysis_status);
+		bool res = q.exec();
 
 		// vip_debug("'%s'\n",q.lastError().text().toLatin1().data());
 		// vip_debug("'%s'\n", db.lastError().text().toLatin1().data());
@@ -742,8 +838,10 @@ QList<qint64> vipSendToDB(const QString& userName, const QString& camera, const 
 			VipShape(sh[i]).setAttribute("id", id);
 		}
 
+		// Numeric fields and a machine-built polygon string only: no free text
+		// reaches this batched statement.
 		// send to thermal_events_instances
-		query = QString("INSERT IGNORE INTO `thermal_events_instances` "
+		QString query = QString("INSERT IGNORE INTO `thermal_events_instances` "
 				"(`timestamp_ns`,`thermal_event_id`,`bbox_x`,`bbox_y`,`bbox_width`,`bbox_height`,"
 				"`max_temperature_C`,`max_T_image_position_x`,`max_T_image_position_y`,`min_temperature_C`,`min_T_image_position_x`,`min_T_image_position_y`,`average_temperature_C`,"
 				"`pixel_area`,`centroid_image_position_x`,`centroid_image_position_y`,`polygon`,`pfc_id`,`overheating_factor`,`max_T_world_position_x_m`,`max_T_world_position_y_m`,"
@@ -832,10 +930,47 @@ QList<qint64> vipSendToDB(const QString& userName, const QString& camera, const 
 		}
 	}
 
+	if (!transaction.commit())
+		return QList<qint64>();
+
 	return resids;
 }
 
 
+
+bool vipDBHasTransactions()
+{
+	QSqlDatabase db = createConnection();
+	return db.isOpen() && db.driver() && db.driver()->hasFeature(QSqlDriver::Transactions);
+}
+
+bool vipDBTransaction(const std::function<bool()>& fn)
+{
+	// Every entry point here goes through the same global connection, so a
+	// transaction opened on it covers the queries the callee runs.
+	QSqlDatabase db = createConnection();
+	if (!db.isOpen())
+		return false;
+	if (!vipDBHasTransactions())
+		return fn();
+
+	++_vip_transaction_depth;
+	if (!db.transaction()) {
+		VIP_LOG_ERROR("Cannot start a database transaction: " + db.lastError().text());
+		return fn();
+	--_vip_transaction_depth;
+	}
+	if (!fn()) {
+		db.rollback();
+		return false;
+	}
+	if (!db.commit()) {
+		VIP_LOG_ERROR("Cannot commit to the database: " + db.lastError().text());
+		db.rollback();
+		return false;
+	}
+	return true;
+}
 
 bool vipRemoveFromDB(const QList<qint64>& ids, VipProgress* p)
 {
@@ -846,6 +981,10 @@ bool vipRemoveFromDB(const QList<qint64>& ids, VipProgress* p)
 	QSqlDatabase db = createConnection();
 	if (!db.isOpen())
 		return false;
+
+	// The master row goes first, its instances after. A failure between the two
+	// leaves instances no identifier points at any more.
+	DBTransaction transaction(db);
 
 	for (qsizetype i = 0; i < ids.size(); ++i) {
 		if (p)
@@ -867,11 +1006,29 @@ bool vipRemoveFromDB(const QList<qint64>& ids, VipProgress* p)
 			}
 		}
 	}
-	return true;
+	return transaction.commit();
 }
 
 bool vipChangeColumnInfoDB(const QList<qint64>& ids, const QString& column, const QString& value, VipProgress* p)
 {
+	// A column name cannot be bound, so it is checked against the columns the
+	// editor is allowed to change rather than concatenated as received.
+	static const QSet<QString> editableColumns = { QStringLiteral("line_of_sight"),
+						      QStringLiteral("device"),
+						      QStringLiteral("category"),
+						      QStringLiteral("is_automatic_detection"),
+						      QStringLiteral("method"),
+						      QStringLiteral("confidence"),
+						      QStringLiteral("user"),
+						      QStringLiteral("comments"),
+						      QStringLiteral("dataset"),
+						      QStringLiteral("name"),
+						      QStringLiteral("analysis_status") };
+	if (!editableColumns.contains(column)) {
+		VIP_LOG_ERROR("Refused to update an unexpected column: " + column);
+		return false;
+	}
+
 	if (p) {
 		p->setText("Change column in DB...");
 		p->setRange(0, ids.size());
@@ -884,7 +1041,10 @@ bool vipChangeColumnInfoDB(const QList<qint64>& ids, const QString& column, cons
 		if (p)
 			p->setValue(i);
 		QSqlQuery q(db);
-		bool res = q.exec("UPDATE `thermal_events` SET `" + column + "` = " + value + "  WHERE `id` = " + QString::number(ids[i]));
+		q.prepare("UPDATE `thermal_events` SET `" + column + "` = ? WHERE `id` = ?");
+		q.addBindValue(value);
+		q.addBindValue(ids[i]);
+		bool res = q.exec();
 		// vip_debug("%s\n", q.lastQuery().toLatin1().data());
 		if (!res) {
 			VIP_LOG_ERROR(q.lastError().text());
@@ -910,6 +1070,7 @@ VipEventQueryResults vipQueryDB(const VipEventQuery& query, VipProgress* p)
 	// first, select Ids in thermal_events table that matches cameras, pulses, comments, durations,...
 
 	QStringList conditions;
+	QVariantList binds;
 
 	if (query.eventIds.size()) {
 		// find by ids...
@@ -937,7 +1098,8 @@ VipEventQueryResults vipQueryDB(const VipEventQuery& query, VipProgress* p)
 		}
 		// method condition
 		if (!query.method.isEmpty()) {
-			conditions << "(method LIKE '%" + query.method + "%')";
+			conditions << "(method LIKE ?)";
+			binds << QVariant("%" + query.method + "%");
 		}
 		// PPO names
 		if (!query.users.isEmpty()) {
@@ -957,20 +1119,23 @@ VipEventQueryResults vipQueryDB(const VipEventQuery& query, VipProgress* p)
 
 		// comment condition
 		if (!query.in_comment.isEmpty()) {
-			conditions << "(comments LIKE '%" + query.in_comment + "%')";
+			conditions << "(comments LIKE ?)";
+			binds << QVariant("%" + query.in_comment + "%");
 		}
 		// dataset condition
 		if (!query.dataset.isEmpty()) {
 			QStringList lst = query.dataset.split(" ");
 			QStringList queries;
 			for (qsizetype i = 0; i < lst.size(); ++i) {
-				queries.append("(dataset LIKE '%" + lst[i] + "%')");
+				queries.append("(dataset LIKE ?)");
+				binds << QVariant("%" + lst[i] + "%");
 			}
 			conditions << "(" + queries.join(" OR ") + ")";
 		}
 		// name condition
 		if (!query.in_name.isEmpty()) {
-			conditions << "(name LIKE '%" + query.in_name + "%')";
+			conditions << "(name LIKE ?)";
+			binds << QVariant("%" + query.in_name + "%");
 		}
 		// duration
 		if (query.min_duration >= 0) {
@@ -1016,7 +1181,7 @@ VipEventQueryResults vipQueryDB(const VipEventQuery& query, VipProgress* p)
 	//	sql += " WHERE id = " + QString::number(query.id_thermaleventinfo);
 	// }
 	// vip_debug("%s\n", sql.toLatin1().data());
-	QSqlQuery q = execQuery(db, sql);
+	QSqlQuery q = execQuery(db, sql, binds);
 	if (q.lastError().isValid()) {
 		VIP_LOG_ERROR(q.lastError().text());
 		result.error = q.lastError().text();
@@ -1697,21 +1862,16 @@ static QString polygonToJSON(const QPolygon& poly)
 
 static QString addDoubleQuotes(const QString& str)
 {
-	QString tmp = str;
-	for (qsizetype i = 0; i < str.size(); ++i) {
-		if (tmp[(QString::size_type)i] == '"' && i > 0 && i < str.size() - 1)
-			tmp[(QString::size_type)i] = ' ';
-	}
-
-	if (tmp.startsWith("\"") && tmp.endsWith("\""))
-		return tmp;
-
-	if (tmp.startsWith("\""))
-		tmp[0] = ' ';
-	if (tmp.endsWith("\""))
-		tmp[tmp.size() - 1] = ' ';
-
-	return "\"" + tmp + "\"";
+	// This replaced inner quotes with spaces, left backslashes alone and treated a
+	// value that already started and ended with a quote as finished: a comment
+	// containing a quote came back altered, and one containing a backslash produced
+	// a document no parser accepts. Let Qt escape it.
+	const QByteArray quoted = QJsonDocument(QJsonArray{ QJsonValue(str) }).toJson(QJsonDocument::Compact);
+	const int first = quoted.indexOf('"');
+	const int last = quoted.lastIndexOf('"');
+	if (first < 0 || last <= first)
+		return QStringLiteral("\"\"");
+	return QString::fromUtf8(quoted.mid(first, last - first + 1));
 }
 
 QByteArray vipEventsToJson(const Vip_event_list& all_shapes, VipProgress* p)
@@ -1951,7 +2111,9 @@ QByteArray vipEventsToJson(const Vip_event_list& all_shapes, VipProgress* p)
 	str << "}\n";
 
 	str.flush();
-	return res.toLatin1();
+	// UTF-8, not Latin-1: the latter turned every character outside it into a
+	// question mark, in a document that is UTF-8 by definition.
+	return res.toUtf8();
 }
 
 static qint64 toTimestamp(const QJsonObject& obj, const QString& name)

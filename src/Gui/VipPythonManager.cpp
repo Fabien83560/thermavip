@@ -6,6 +6,8 @@
  */
 
 
+#include <QCoreApplication>
+
 #include "VipPythonManager.h"
 #include "VipTextHighlighter.h"
 #include "VipPyProcessing.h"
@@ -430,7 +432,8 @@ VipPythonManager::VipPythonManager()
 	//register all files found in the Python directory
 	//TEST: disable for faster loading
 	VipPyInterpreter::instance()->addProcessingDirectory(vipGetPythonDirectory());
-	VipPyInterpreter::instance()->addProcessingDirectory("./Python");
+	// Next to the application, not next to wherever it happened to be started from.
+	VipPyInterpreter::instance()->addProcessingDirectory(QCoreApplication::applicationDirPath() + "/Python");
 
 	//register PyCustomizePlotPlayer
 	vipFDPlayerCreated().append<void(VipPlotPlayer*)>(detail::pyCustomizePlotPlayer);

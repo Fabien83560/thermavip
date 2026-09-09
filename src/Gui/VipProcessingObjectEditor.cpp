@@ -3361,7 +3361,15 @@ public:
 			parent->setItemWidget(this, w);
 		}
 
-		QList<QLabel*> labels = parent->itemWidget(this)->findChildren<QLabel*>();
+		// The four branches above cover the enumeration as it stands, but the type
+		// comes from a session file: an unknown one left no item widget and no x.
+		QWidget* item = parent->itemWidget(this);
+		if (!item || !x) {
+			setHidden(true);
+			return;
+		}
+
+		QList<QLabel*> labels = item->findChildren<QLabel*>();
 		for (int i = 0; i < labels.size(); ++i)
 			labels[i]->setAttribute(Qt::WA_TransparentForMouseEvents, true);
 
@@ -4014,9 +4022,21 @@ void VipWarpingEditor::LoadTransform()
 	if (!filename.isEmpty()) {
 		QFile in(filename);
 		if (in.open(QFile::ReadOnly)) {
-			int size = (int)in.size() / sizeof(QPointF);
-			QVector<QPointF> warp(size);
-			in.read((char*)warp.data(), in.size());
+			// The length comes from the file, which is neither signed nor checked.
+			// Allocating size/sizeof(QPointF) elements and then reading size BYTES
+			// overflows the buffer on any file whose length is not a multiple of
+			// the point size, which only holds for files this application wrote.
+			const qint64 bytes = in.size();
+			constexpr qint64 pointSize = (qint64)sizeof(QPointF);
+			if (bytes <= 0 || bytes % pointSize != 0 || bytes / pointSize > (qint64)INT_MAX) {
+				VIP_LOG_ERROR("VipWarping: invalid warping file size " + filename);
+				return;
+			}
+			QVector<QPointF> warp((int)(bytes / pointSize));
+			if (in.read((char*)warp.data(), bytes) != bytes) {
+				VIP_LOG_ERROR("VipWarping: truncated warping file " + filename);
+				return;
+			}
 			d_data->warping->setWarping(vipToPointVector( warp));
 			d_data->warping->reload();
 		}

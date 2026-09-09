@@ -40,7 +40,9 @@
 #include <qvector.h>
 #include <qshareddata.h>
 #include <qdatastream.h>
+#include <qiodevice.h>
 
+#include <limits>
 #include <utility>
 #include <type_traits>
 #include <iterator>
@@ -376,15 +378,26 @@ namespace detail
 
 		T* buffer; // actual values
 
-		// Initialize from a maximum capacity
+		// Initialize from a maximum capacity.
+		// INVARIANT: max_size is a power of two. mask() returns capacity - 1 and is
+		// used as a wrap-around bit mask by at(), spans() and destroy_range(), which
+		// is only equivalent to a modulo under that invariant.
 		CircularBuffer(qsizetype max_size = 0)
 		  : begin(0)
 		  , size(0)
 		  , capacity(max_size)
 		  , buffer(nullptr)
 		{
-			VIP_ASSERT_DEBUG(max_size >= 0, "");
+			VIP_ASSERT_DEBUG(max_size == 0 || (max_size & (max_size - 1)) == 0, "capacity must be a power of two");
+			// The sign check used to be a debug assertion, which release builds drop,
+			// and the product below is unsigned: a capacity of 2^61 with an 8 byte T
+			// wrapped to exactly 0, malloc(0) returned a usable block, and every
+			// insertion then wrote outside it.
+			if (max_size < 0)
+				throw std::bad_alloc();
 			if (max_size) {
+				if (static_cast<size_t>(max_size) > (std::numeric_limits<size_t>::max)() / sizeof(T))
+					throw std::bad_alloc();
 				buffer = (T*)malloc((size_t)max_size * sizeof(T));
 				if (!buffer)
 					throw std::bad_alloc();
@@ -1208,6 +1221,11 @@ class VipCircularVector
 		auto s = 1ull << vipBitScanReverse64((uint64_t)size);
 		if (s < (uint64_t)size)
 			s = s << 1;
+		// Rounding up past the representable range wrapped to 0, which yielded a
+		// capacity of 0 for a non empty container. Report it; the buffer
+		// constructor turns a negative capacity into bad_alloc.
+		if (s == 0 || s > static_cast<uint64_t>((std::numeric_limits<qsizetype>::max)()))
+			return -1;
 		return s;
 	}
 
@@ -1654,8 +1672,19 @@ QDataStream& operator>>(QDataStream& s, VipCircularVector<T, O>& c)
 	s >> size;
 	if (s.status() != QDataStream::Ok)
 		return s;
-	qsizetype n = (qsizetype)size;
-	c.reserve(n);
+	// The count comes from the stream, so it must not size an allocation: reserving
+	// it up front asked for gigabytes before a single element had been read, and a
+	// count near 2^61 wrapped the capacity computation. Growth is left to the
+	// container, which is bounded by what the stream actually holds.
+	if (size < 0) {
+		s.setStatus(QDataStream::ReadCorruptData);
+		return s;
+	}
+	if (s.device() && !s.device()->isSequential() && size > s.device()->bytesAvailable()) {
+		s.setStatus(QDataStream::ReadCorruptData);
+		return s;
+	}
+	const qsizetype n = (qsizetype)size;
 	for (qsizetype i = 0; i < n; ++i) {
 		T t;
 		s >> t;

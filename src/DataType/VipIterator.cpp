@@ -58,6 +58,10 @@ int vipParallelSizeThreshold() noexcept
 }
 void vipSetParallelSizeThreshold(int threshold) noexcept
 {
+	// Its twin above clamps its argument; this one took anything, and a negative
+	// threshold made every loop parallel whatever its size.
+	if (threshold < 1)
+		threshold = 1;
 	_threshold.store(threshold);
 }
 

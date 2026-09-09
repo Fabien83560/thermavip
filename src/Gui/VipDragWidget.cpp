@@ -2899,34 +2899,34 @@ bool VipMultiDragWidget::supportReparent(QWidget* new_parent)
 
 VipBaseDragWidget* VipMultiDragWidget::createFromMimeData(const QMimeData* mime_data)
 {
-	if (mime_data->hasFormat("application/dragwidget")) {
-		// check that the widget supports Drop operation
-		const VipBaseDragWidgetMimeData* mime = static_cast<const VipBaseDragWidgetMimeData*>(mime_data);
+	// A format string is not a type: any code can declare that format on a plain
+	// QMimeData, and the downcast then read dragWidget at an arbitrary offset of an
+	// unrelated object. The class carries Q_OBJECT, so ask the meta object system.
+	if (const VipBaseDragWidgetMimeData* mime = qobject_cast<const VipBaseDragWidgetMimeData*>(mime_data)) {
 		if (!mime->dragWidget->isDropable())
 			return nullptr;
 		else
 			return mime->dragWidget;
 	}
 	else {
-		QMimeData* mime = const_cast<QMimeData*>(mime_data);
-		const auto lst = vipDropMimeData().match(mime, this);
+		QMimeData* other = const_cast<QMimeData*>(mime_data);
+		const auto lst = vipDropMimeData().match(other, this);
 		if (lst.size())
-			return lst.back()(mime, this).value<VipBaseDragWidget*>();
+			return lst.back()(other, this).value<VipBaseDragWidget*>();
 	}
 	return nullptr;
 }
 
 bool VipMultiDragWidget::supportDrop(const QMimeData* mime_data)
 {
-	if (mime_data->hasFormat("application/dragwidget")) {
-		const VipBaseDragWidgetMimeData* mime = static_cast<const VipBaseDragWidgetMimeData*>(mime_data);
+	if (const VipBaseDragWidgetMimeData* mime = qobject_cast<const VipBaseDragWidgetMimeData*>(mime_data)) {
 		return mime->dragWidget->isDropable();
 	}
 	else {
-		QMimeData* mime = const_cast<QMimeData*>(mime_data);
-		const auto lst = vipAcceptDragMimeData().match(mime, this);
+		QMimeData* other = const_cast<QMimeData*>(mime_data);
+		const auto lst = vipAcceptDragMimeData().match(other, this);
 		if (lst.size())
-			return lst.back()(mime, this).value<bool>();
+			return lst.back()(other, this).value<bool>();
 	}
 	return false;
 }
@@ -3262,15 +3262,53 @@ VipArchive& operator<<(VipArchive& ar, VipBaseDragWidget* w)
 	return ar;
 }
 
+// Highest state of VipBaseDragWidget::VisibilityState.
+static constexpr int vipMaxVisibilityState = VipBaseDragWidget::Minimized;
+// A layout larger than this is not something a user built.
+static constexpr int vipMaxLayoutCount = 1024;
+
+static VipBaseDragWidget::VisibilityState vipReadVisibility(VipArchive& ar)
+{
+	const int state = ar.read("visibility").toInt();
+	if (state < 0 || state > vipMaxVisibilityState) {
+		VIP_LOG_WARNING("Unknown widget visibility in session file, falling back to normal");
+		return VipBaseDragWidget::Normal;
+	}
+	return static_cast<VipBaseDragWidget::VisibilityState>(state);
+}
+
+static VipBaseDragWidget::Operations vipReadOperations(VipArchive& ar)
+{
+	constexpr int defined = VipBaseDragWidget::AllOperations | VipBaseDragWidget::NoHideOnMaximize;
+	return static_cast<VipBaseDragWidget::Operations>(ar.read("operations").toInt() & defined);
+}
+
+// Read a count that drives widget creation. Returns false on an implausible one.
+static bool vipReadLayoutCount(VipArchive& ar, const char* name, int& count)
+{
+	count = ar.read(name).toInt();
+	if (count < 0 || count > vipMaxLayoutCount) {
+		VIP_LOG_ERROR(QString("Implausible %1 in session file: %2").arg(name).arg(count));
+		count = 0;
+		return false;
+	}
+	return true;
+}
+
 VipArchive& operator>>(VipArchive& ar, VipBaseDragWidget* w)
 {
 	VipUniqueId::setId<VipBaseDragWidget>(w, ar.read("id").toInt());
 	w->setWindowTitle(ar.read("title").toString());
-	w->setSupportedOperations((VipBaseDragWidget::Operations)ar.read("operations").toInt());
+	// Both values come from the file. Converting an integer outside the enumeration
+	// is undefined, and in practice produced a state no branch recognises, which
+	// left the window permanently stuck. Undefined operation bits do the same to
+	// the title bar.
+	w->setSupportedOperations(vipReadOperations(ar));
+	const VipBaseDragWidget::VisibilityState visibility = vipReadVisibility(ar);
 	if (!w->parentMultiDragWidget())
-		w->setInternalVisibility((VipBaseDragWidget::VisibilityState)ar.read("visibility").toInt());
+		w->setInternalVisibility(visibility);
 	else
-		w->setVisibility((VipBaseDragWidget::VisibilityState)ar.read("visibility").toInt());
+		w->setVisibility(visibility);
 	return ar;
 }
 
@@ -3328,8 +3366,13 @@ VipArchive& operator>>(VipArchive& ar, VipMultiDragWidget* w)
 	QRect saved_geometry = ar.read("saved_geometry").toRect();
 	// w->resize(size);
 	QByteArray hstate = ar.read("state").toByteArray();
-	int height = ar.read("height").toInt();
-	VipMultiDragWidget::VisibilityState visibility = (VipMultiDragWidget::VisibilityState)ar.read("visibility").toInt();
+	// Each row builds a splitter with its tab widget, each column a tab widget, and
+	// each tab a widget: nothing bounded these three counts, so a declared height of
+	// 100000 built hundreds of thousands of widgets and froze the interface.
+	int height = 0;
+	if (!vipReadLayoutCount(ar, "height", height))
+		return ar;
+	const VipMultiDragWidget::VisibilityState visibility = vipReadVisibility(ar);
 
 	int orientation = 0;
 	ar.save();
@@ -3345,13 +3388,21 @@ VipArchive& operator>>(VipArchive& ar, VipMultiDragWidget* w)
 		ar.start("row");
 
 		QByteArray wstate = ar.read("state").toByteArray();
-		int width = ar.read("width").toInt();
+		int width = 0;
+		if (!vipReadLayoutCount(ar, "width", width)) {
+			ar.end();
+			break;
+		}
 
 		w->mainResize(h + 1);
 		for (int i = 0; i < width; ++i) {
 			w->subResize(h, i + 1);
 			ar.start("tab");
-			int count = ar.read("count").toInt();
+			int count = 0;
+			if (!vipReadLayoutCount(ar, "count", count)) {
+				ar.end();
+				break;
+			}
 			int current = ar.read("current").toInt();
 			QTabWidget* tab = w->tabWidget(h, i);
 
@@ -3372,11 +3423,13 @@ VipArchive& operator>>(VipArchive& ar, VipMultiDragWidget* w)
 			tab->blockSignals(false);
 			ar.end();
 		}
-		w->subSplitter(h)->restoreState(wstate);
+		if (!w->subSplitter(h)->restoreState(wstate))
+			VIP_LOG_WARNING("Could not restore a row layout from the session file");
 
 		ar.end();
 	}
-	w->mainSplitter()->restoreState(hstate);
+	if (!w->mainSplitter()->restoreState(hstate))
+		VIP_LOG_WARNING("Could not restore the main layout from the session file");
 
 	// reapply visibility
 	for (QMap<VipBaseDragWidget*, VipBaseDragWidget::VisibilityState>::iterator it = visibility_states.begin(); it != visibility_states.end(); ++it) {

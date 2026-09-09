@@ -32,6 +32,7 @@
 #include <iostream>
 #include <cmath>
 #include <set>
+#include <atomic>
 #include <deque>
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -2056,6 +2057,9 @@ QStringList VipPyInterpreter::addProcessingFile(const QFileInfo& file, const QSt
 	QFile in(file.canonicalFilePath());
 	in.open(QFile::ReadOnly);
 	QString code = in.readAll();
+	// Scanning a directory runs every Python file in it. Say which ones, so that the
+	// mechanism is at least visible to the user it runs as.
+	VIP_LOG_INFO("Running Python file: " + file.canonicalFilePath());
 	VipPyError err = this->execCode(code).value(20000).value<VipPyError>();
 	if (!err.isNull()) {
 		VIP_LOG_WARNING("Cannot load Python processing: " + file.baseName());
@@ -2107,6 +2111,13 @@ QStringList VipPyInterpreter::addProcessingFile(const QFileInfo& file, const QSt
 
 QStringList VipPyInterpreter::addProcessingDirectory(const QString& dir, bool register_processings)
 {
+	// A relative directory is resolved against the working directory of the process,
+	// so starting the application from a folder that happens to hold one of these
+	// names ran everything inside it. Only an explicit location is accepted.
+	if (QDir::isRelativePath(dir)) {
+		VIP_LOG_ERROR("Refusing to run Python from a relative directory: " + dir);
+		return QStringList();
+	}
 	return addProcessingDirectoryInternal(dir, QString(), register_processings);
 }
 
@@ -2215,6 +2226,38 @@ public:
 	PyLaunchCode launchCode;
 	QPointer<QObject> interp;
 };
+
+// Session files carry the Python properties of the processings they store, so
+// opening one chooses what runs. Refused unless the user has said otherwise.
+static std::atomic<bool> _vip_restored_python_allowed{ false };
+
+void vipSetRestoredPythonCodeAllowed(bool allowed)
+{
+	_vip_restored_python_allowed = allowed;
+}
+bool vipRestoredPythonCodeAllowed()
+{
+	return _vip_restored_python_allowed;
+}
+
+void vipAllowRestoredPythonCode(VipProcessingObject* obj)
+{
+	if (obj)
+		obj->setProperty("_vip_from_archive", false);
+}
+
+bool vipCanRunRestoredPythonCode(VipProcessingObject* obj)
+{
+	if (!obj || _vip_restored_python_allowed)
+		return true;
+	if (!obj->property("_vip_from_archive").toBool())
+		return true;
+	if (!obj->property("_vip_refused_python").toBool()) {
+		obj->setProperty("_vip_refused_python", true);
+		VIP_LOG_ERROR("Refusing to run Python code restored from a session file in '" + obj->objectName() + "'");
+	}
+	return false;
+}
 
 VipPyInterpreter::VipPyInterpreter(QObject* parent)
   : VipPyIOOperation(parent)

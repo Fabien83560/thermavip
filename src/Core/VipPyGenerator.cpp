@@ -29,6 +29,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "VipProgress.h"
 #include "VipPyGenerator.h"
 #include "VipPyProcessing.h"
 
@@ -46,7 +47,10 @@ void VipPySignalGenerator::ReadThread::run()
 		if (!gen->readData(time * 1000000))
 			break;
 		qint64 el = QDateTime::currentMSecsSinceEpoch() - st;
-		int sleep = gen->propertyAt(0)->value<int>() / 1000000 - el;
+		// The same property is read as qint64 when the device opens. Read as an int,
+		// a period above 2.1 seconds overflows and the sleep is skipped, so the loop
+		// spins with no pause at all.
+		const qint64 sleep = gen->propertyAt(0)->value<qint64>() / 1000000 - el;
 		if (sleep > 0)
 			vipSleep(sleep);
 	}
@@ -110,6 +114,13 @@ bool VipPySignalGenerator::open(VipIODevice::OpenModes mode)
 
 	if (code.isEmpty())
 		return false;
+	// The code below is a property, and properties come back from session files.
+	// One session is opened at every start without asking, so running it would
+	// mean running whatever that file chose.
+	if (!vipCanRunRestoredPythonCode(this)) {
+		setError("Python code restored from a session file was not run");
+		return false;
+	}
 	if (deviceType() == Temporal && (end - start) <= 0)
 		return false;
 	if (sampling <= 0)
@@ -131,15 +142,52 @@ bool VipPySignalGenerator::open(VipIODevice::OpenModes mode)
 		ok = false;
 		value.toDouble(&ok);
 		if (ok) {
-			// generate the curve
+			// One synchronous round trip to the interpreter per sample, on the calling
+			// thread, which is the GUI one. The count is (end - start) / sampling and
+			// nothing bounded it: an hour at the default sampling is 180000 round
+			// trips with the interface frozen throughout, and the three properties
+			// come back from session files, where they can ask for far more than that.
+			static constexpr qint64 maxGeneratedPoints = 10 * 1000 * 1000;
+			const qint64 count = (end - start) / sampling + 1;
+			if (count > maxGeneratedPoints) {
+				setError("Too many points to generate: " + QString::number(count));
+				return false;
+			}
+
+			VipProgress progress;
+			progress.setRange(0, (double)count);
+			progress.setText("Generating curve...");
+			progress.setCancelable(true);
+
 			VipPointVector vector;
-			for (qint64 time = start; time <= end; time += sampling) {
+			vector.reserve(count);
+			qint64 index = 0;
+			for (qint64 time = start; time <= end; time += sampling, ++index) {
 				bool ok = false;
 				QVariant value = computeValue(time, ok);
 				if (!ok)
 					return false;
 
-				vector.append(QPointF(time, value.toDouble()));
+				// The first sample's conversion is checked above, and it decides the
+				// strategy; the ones after it were not. QVariant::toDouble returns 0.0
+				// on failure, so an expression that changes nature partway through the
+				// range filled the curve with zeros no one could tell from measured
+				// ones.
+				bool converted = false;
+				const double y = value.toDouble(&converted);
+				if (!converted) {
+					setError("Expression did not produce a number at time " + QString::number(time));
+					return false;
+				}
+				vector.append(QPointF(time, y));
+
+				if ((index & 0xff) == 0) {
+					progress.setValue((double)index);
+					if (progress.canceled()) {
+						setError("Curve generation cancelled");
+						return false;
+					}
+				}
 			}
 			d_data = QVariant::fromValue(vector);
 			if (!readData(0))

@@ -30,6 +30,7 @@
  */
 
 #include "VipUpdate.h"
+#include "VipCore.h"
 #include "VipLogging.h"
 
 #include <QDir>
@@ -286,12 +287,22 @@ bool VipUpdate::renameNewFiles(const QString& dir_name)
 
 	bool has_opened_files = false;
 
+	// The caller used to pass the working directory, which is wherever the
+	// application happened to be started from. Promoting a file deletes the one it
+	// replaces, so the walk has to stay inside the installation, and it has to look
+	// only at the files it is meant to promote.
+	const QString install = QFileInfo(vipAppCanonicalPath()).canonicalPath();
+	if (QFileInfo(dir_name).canonicalFilePath() != install) {
+		VIP_LOG_ERROR("Refusing to promote update files outside the installation directory");
+		return false;
+	}
+
 	if (QDir(dir_name).exists()) {
 		QString m_inDir = dir_name;
 		m_inDir.replace("\\", "/");
 		if (!m_inDir.endsWith("/"))
 			m_inDir += "/";
-		QDirIterator it(m_inDir, QDirIterator::Subdirectories);
+		QDirIterator it(m_inDir, QStringList() << "*.vipnewfile", QDir::Files, QDirIterator::Subdirectories);
 		while (it.hasNext()) {
 			QString next = it.next();
 			QFileInfo info(next);

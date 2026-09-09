@@ -9,7 +9,9 @@
 #include "vip_test_main.h"
 
 #include "VipProcessingObject.h"
+#include "VipImageProcessing.h"
 #include "VipStandardProcessing.h"
+#include "VipXmlArchive.h"
 
 #include <atomic>
 #include <memory>
@@ -397,6 +399,136 @@ private Q_SLOTS:
 			const std::unique_ptr<VipProcessingObject> c(p.copy());
 			QVERIFY2(c != nullptr, "VipXOffset must be rebuildable by name");
 		}
+	}
+
+	/// The list writer records an element count. Kept separate from the read
+	/// below so that a failure points at one side or the other.
+	void sessionListWritesItsCount()
+	{
+		VipProcessingList source;
+		// A registered processing: the writer only serialises those the factory
+		// can rebuild.
+		QVERIFY(source.append(new VipClamp()));
+
+		VipXOStringArchive out;
+		QVERIFY(out.content("list", &source));
+		QVERIFY2(out.toString().contains(">1</count>"), qPrintable(out.toString()));
+	}
+
+	/// The reader used that count directly as a loop bound, so a session file
+	/// declaring a huge one made it allocate until memory ran out, silently.
+	/// The archive here is a fixed string rather than one just written, which is
+	/// what a crafted session file actually is.
+	void hugeCountInSessionIsRejected()
+	{
+		const QString xml = QStringLiteral(
+			"<list type_name=\"VipProcessingList*\">"
+			"<processing_name type_name=\"QString\"></processing_name>"
+			"<count type_name=\"qlonglong\">100000000</count>"
+			"</list>");
+
+		VipProcessingList target;
+		VipXIStringArchive in(xml);
+		QVERIFY(in.isOpen());
+		in.content("list", &target);
+
+		QCOMPARE(target.size(), 0);
+		QVERIFY2(in.hasError(), "an out of range count must be reported, not consumed");
+	}
+
+	/// Extracting an attribute as a number must accept a number and nothing
+	/// else. The conversion used to accept any string starting with digits and
+	/// silently drop the rest, so "12abc" became 12 and "1,5" became 1, both
+	/// reported as valid measurements. Non finite values must be refused for the
+	/// same reason: they travel downstream as if they had been measured.
+	void attributeToDoubleRejectsPartialNumbers()
+	{
+		struct Case
+		{
+			const char* text;
+			bool accepted;
+			double value;
+		};
+		const Case cases[] = { { "12", true, 12.0 },	 { " 3.5 ", true, 3.5 },  { "-2.25", true, -2.25 }, { "1e3", true, 1000.0 },
+				       { "12abc", false, 0.0 },	 { "1,5", false, 0.0 },	  { "abc", false, 0.0 },    { "", false, 0.0 },
+				       { "nan", false, 0.0 },	 { "inf", false, 0.0 },	  { "1e999", false, 0.0 },  { "0x10", false, 0.0 } };
+
+		for (const Case& c : cases) {
+			VipExtractAttribute proc;
+			proc.setScheduleStrategy(VipProcessingObject::Asynchronous, false);
+			proc.propertyAt(0)->setData(QString("measure"));
+			proc.propertyAt(1)->setData(true);
+
+			VipAnyData in(QVariant(0), 0);
+			in.setAttribute("measure", QString::fromLatin1(c.text));
+			proc.inputAt(0)->setData(in);
+			proc.update();
+
+			const bool accepted = !proc.hasError();
+			QVERIFY2(accepted == c.accepted, qPrintable(QStringLiteral("'%1': expected %2, got %3").arg(c.text).arg(c.accepted).arg(accepted)));
+			if (c.accepted)
+				QCOMPARE(proc.outputAt(0)->data().value<double>(), c.value);
+		}
+	}
+
+	// -- Image transform list ------------------------------------------------
+
+	/// A transform list must survive a session round trip. It does not.
+	///
+	/// EXPECTED FAILURE. Saving two transforms writes 48 bytes — the size as a
+	/// qsizetype plus twenty bytes per transform — and loading them back returns
+	/// success with an empty list. The stream operators the file declares are
+	/// static, so the metatype system does not use them: what runs is the generic
+	/// container streaming, and the two halves do not agree. An image transform
+	/// list stored in a session is therefore lost on reload, without a message.
+	/// This test states the EXPECTED behaviour and must stay red until the format
+	/// is made symmetric.
+	void transformListRoundTrip()
+	{
+		TransformList source;
+		source.push_back(Transform(Transform::Rotate, 90, 0));
+		source.push_back(Transform(Transform::Scale, 2, 3));
+
+		QByteArray buffer;
+		{
+			QDataStream out(&buffer, QIODevice::WriteOnly);
+			QVERIFY(QMetaType(qMetaTypeId<TransformList>()).save(out, &source));
+		}
+		QCOMPARE(buffer.size(), 48);
+
+		TransformList read;
+		QDataStream in(buffer);
+		QVERIFY(QMetaType(qMetaTypeId<TransformList>()).load(in, &read));
+
+		QEXPECT_FAIL("", "the declared stream operators are static, the metatype system uses the generic ones", Continue);
+		QCOMPARE(read.size(), source.size());
+	}
+
+	/// The memory a queue holds is counted in bytes, and the cap it feeds is too.
+	/// The whole chain was a signed 32 bit int, which saturates at two gigabytes: a
+	/// queue of large images passes that without difficulty, the count wraps, and a
+	/// negative count compares favourably against any cap, so the limit stopped
+	/// working exactly where it was needed.
+	void queueMemoryAccountingIsSixtyFourBit()
+	{
+		VipFIFOList list;
+		list.setMaxListMemory(Q_INT64_C(8) * 1024 * 1024 * 1024);
+		QCOMPARE(list.maxListMemory(), Q_INT64_C(8) * 1024 * 1024 * 1024);
+
+		VipProcessingManager::setMaxListMemory(Q_INT64_C(6) * 1024 * 1024 * 1024);
+		QCOMPARE(VipProcessingManager::maxListMemory(), Q_INT64_C(6) * 1024 * 1024 * 1024);
+		VipProcessingManager::setMaxListMemory(50000000);
+	}
+
+	/// A footprint larger than an int can hold is reported as it is.
+	void largeDataFootprintIsNotTruncated()
+	{
+		VipNDArrayType<double> big(vipVector(4096, 8192)); // 256 MB
+		VipAnyData any(QVariant::fromValue(VipNDArray(big)), 0);
+
+		const qint64 footprint = any.memoryFootprint();
+		QVERIFY2(footprint > 0, "a large array must not report a negative footprint");
+		QVERIFY(footprint >= Q_INT64_C(256) * 1024 * 1024);
 	}
 
 	// -- VipProcessingList ---------------------------------------------------

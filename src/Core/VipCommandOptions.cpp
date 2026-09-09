@@ -443,7 +443,10 @@ void CommandOptionsPrivate::parse(const QStringList& params)
 		param = params[pos];
 		pos++;
 
-		if (!endFlags && ((flagStyle == VipCommandOptions::Slash && param[0] == '/') || (flagStyle != VipCommandOptions::Slash && param[0] == '-'))) {
+		// An empty argument reaches here whenever a script interpolates an unset
+		// variable between quotes, and param[0] on it is an out of bounds access.
+		// startsWith is defined on an empty string.
+		if (!endFlags && ((flagStyle == VipCommandOptions::Slash && param.startsWith('/')) || (flagStyle != VipCommandOptions::Slash && param.startsWith('-')))) {
 			// tagged argument
 			if (param.length() == 1) {
 				// "-" or "/" alone can't possibly match a flag, so use positional.
@@ -480,6 +483,10 @@ void CommandOptionsPrivate::parse(const QStringList& params)
 									break;
 								}
 								value = params[pos];
+								// The long form consumes the value it takes; this one read it
+								// and left it in place, so the next turn of the loop saw it
+								// again as an argument of its own.
+								pos++;
 							}
 							else {
 								value = "";
@@ -522,8 +529,8 @@ void CommandOptionsPrivate::parse(const QStringList& params)
 					}
 					else if ((paramStyle & VipCommandOptions::Space) && (option->paramType & VipCommandOptions::ValueOptional) && !hasEquals) {
 						if (pos < params.count()) {
-							if (!((flagStyle == VipCommandOptions::Slash && params.at(pos)[0] == '/') ||
-							      (flagStyle != VipCommandOptions::Slash && params.at(pos)[0] == '-'))) {
+							if (!((flagStyle == VipCommandOptions::Slash && params.at(pos).startsWith('/')) ||
+							      (flagStyle != VipCommandOptions::Slash && params.at(pos).startsWith('-')))) {
 								value = params[pos];
 								pos++;
 							}

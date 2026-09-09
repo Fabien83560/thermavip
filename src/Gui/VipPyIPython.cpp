@@ -9,6 +9,7 @@
 #include "VipCore.h"
 #include "VipLogging.h"
 
+#include <qrandom.h>
 #include <qsharedmemory.h>
 #include <qdatetime.h>
 #include <qdatastream.h>
@@ -1070,12 +1071,15 @@ void VipIPythonShellProcess::setStyleSheet(const QString& st)
 
 QString VipIPythonShellProcess::findNextMemoryName()
 {
-	int count = 1;
+	// The segment is published in the system wide namespace, so any process of the
+	// session can attach to it, and this channel drives exec() and unpickling on the
+	// other side. A counter made the name trivial to guess; a random suffix does not
+	// authenticate the peer, but it stops the segment from being found by name.
 	while (true) {
-		QSharedMemory mem("Thermavip-" + QString::number(count));
+		const QString name = "Thermavip-" + QString::number(QRandomGenerator::system()->generate64(), 16);
+		QSharedMemory mem(name);
 		if (!mem.attach())
-			return "Thermavip-" + QString::number(count);
-		++count;
+			return name;
 	}
 	return QString();
 }

@@ -171,7 +171,12 @@ def estimate_tau_for_pulse(pulse: int, times , temperatures):
         
     import time
     t = time.time()
-    taus = estimate_tau(pow_t * 1e-9,powers[-1],pow_v)
+    # tmp[-1], not powers[-1]: resample_all put every signal on one time base, and
+    # the temperature is the reference the fit is measured against. Passing the raw
+    # array threw that away for the one signal that matters — either the shapes
+    # disagree and the subtraction raises, or they happen to match and two signals
+    # offset in time are compared, which yields a wrong tau with no message.
+    taus = estimate_tau(pow_t * 1e-9,tmp[-1],pow_v)
     t = time.time() - t
     print("elapsed:",t)
     print(taus)

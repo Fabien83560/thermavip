@@ -578,10 +578,18 @@ QDataStream& operator<<(QDataStream& os, const VipHybridVector<T, N>& v)
 template<class T, qsizetype N>
 QDataStream& operator>>(QDataStream& is, VipHybridVector<T, N>& v)
 {
-	qsizetype size;
+	// The size comes from the stream. resize() only asserts in debug builds and
+	// the storage is a fixed array, so an unchecked value writes past its end in
+	// release builds, on data read from a file.
+	constexpr qsizetype capacity = N < 0 ? static_cast<qsizetype>(VIP_MAX_DIMS) : N;
+	qsizetype size = 0;
 	is >> size;
+	if (is.status() != QDataStream::Ok || size < 0 || size > capacity) {
+		is.setStatus(QDataStream::ReadCorruptData);
+		return is;
+	}
 	v.resize(size);
-	for (qsizetype i = 0; i < size; ++i)
+	for (qsizetype i = 0; i < size && is.status() == QDataStream::Ok; ++i)
 		is >> v[i];
 	return is;
 }

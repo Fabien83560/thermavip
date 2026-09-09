@@ -8,6 +8,8 @@
 
 #include "vip_test_main.h"
 
+#include <QtEndian>
+
 #include "VipArchive.h"
 #include "VipXmlArchive.h"
 
@@ -211,6 +213,124 @@ private Q_SLOTS:
 		int value = 0;
 		in.content("anything", value);
 		QVERIFY(true); // the call returned
+	}
+
+	/// Lengths announced by a binary archive used to size buffers before anything
+	/// checked them, so one corrupted field asked for an arbitrary allocation. The
+	/// reader must report the record instead. One of the callers builds an archive
+	/// from the first bytes of a file just to detect its format, which puts this
+	/// path ahead of any validation.
+	void binaryImplausibleNameLengthIsRejected()
+	{
+		QByteArray buffer;
+		{
+			VipBinaryArchive out(&buffer, QIODevice::WriteOnly);
+			QVERIFY(out.content("number", 42));
+		}
+		QVERIFY(buffer.size() > 3 * (int)sizeof(qsizetype));
+
+		// The name length is the second field of the record.
+		const qsizetype huge = qToLittleEndian<qsizetype>(Q_INT64_C(0x0000ffffffffffff));
+		memcpy(buffer.data() + sizeof(qsizetype), &huge, sizeof(huge));
+
+		VipBinaryArchive in(buffer);
+		int number = 0;
+		in.content("number", number);
+
+		QVERIFY2(in.hasError(), "an implausible name length must be reported, not allocated");
+		QCOMPARE(number, 0);
+	}
+
+	/// Same guard on the negative side: the lengths are signed and come from the
+	/// file, so they can be negative.
+	void binaryNegativeNameLengthIsRejected()
+	{
+		QByteArray buffer;
+		{
+			VipBinaryArchive out(&buffer, QIODevice::WriteOnly);
+			QVERIFY(out.content("number", 42));
+		}
+
+		const qsizetype negative = qToLittleEndian<qsizetype>(Q_INT64_C(-8));
+		memcpy(buffer.data() + sizeof(qsizetype), &negative, sizeof(negative));
+
+		VipBinaryArchive in(buffer);
+		int number = 0;
+		in.content("number", number);
+
+		QVERIFY(in.hasError());
+	}
+
+	/// A record cut in half must be reported rather than read as if complete.
+	void truncatedBinaryContentIsReported()
+	{
+		QByteArray buffer;
+		{
+			VipBinaryArchive out(&buffer, QIODevice::WriteOnly);
+			QVERIFY(out.content("text", QString("hello world, at some length")));
+		}
+		buffer.truncate(buffer.size() / 2);
+
+		VipBinaryArchive in(buffer);
+		QString text;
+		in.content("text", text);
+
+		QVERIFY2(in.hasError(), "a truncated record must be reported");
+	}
+
+	/// A map round trips through a binary archive.
+	///
+	/// This passes on the code as it was: a map is handled by the serialisation
+	/// dispatcher before it reaches the fallback that used to write into a local
+	/// buffer and drop it. The test pins the behaviour that matters to a reader; it
+	/// does not reach that fallback, which is only used where no serialisation
+	/// function is registered for the type.
+	void binaryRoundTripVariantMap()
+	{
+		QVariantMap source;
+		source["number"] = 42;
+		source["text"] = QString("hello");
+		source["real"] = 3.5;
+
+		QByteArray buffer;
+		{
+			VipBinaryArchive out(&buffer, QIODevice::WriteOnly);
+			QVERIFY(out.content("map", source));
+		}
+
+		VipBinaryArchive in(buffer);
+		QVariantMap read;
+		QVERIFY(in.content("map", read));
+
+		QCOMPARE(read.size(), source.size());
+		QCOMPARE(read["number"].toInt(), 42);
+		QCOMPARE(read["text"].toString(), QString("hello"));
+		QCOMPARE(read["real"].toDouble(), 3.5);
+	}
+
+	/// Nested nodes read back in order through a binary archive. Closing a node
+	/// walked past a start tag by seven bytes, which left every following read out
+	/// of alignment.
+	void binaryNestedNodesAreWalkedCorrectly()
+	{
+		QByteArray buffer;
+		{
+			VipBinaryArchive out(&buffer, QIODevice::WriteOnly);
+			QVERIFY(out.start("root"));
+			QVERIFY(out.start("child"));
+			QVERIFY(out.content("inner", 7));
+			QVERIFY(out.end());
+			QVERIFY(out.content("after", 9));
+			QVERIFY(out.end());
+		}
+
+		VipBinaryArchive in(buffer);
+		int after = 0;
+		QVERIFY2(in.start("root"), "start root");
+		QVERIFY2(in.start("child"), "start child");
+		QVERIFY2(in.end(), qPrintable("closing a node without reading it: " + in.errorString()));
+		QVERIFY2(in.content("after", after), qPrintable("read after: " + in.errorString()));
+		QCOMPARE(after, 9);
 	}
 };
 

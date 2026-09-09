@@ -45,6 +45,7 @@
 #include "VipIODevice.h"
 #include "VipLogging.h"
 #include "VipProcessingObject.h"
+#include <cmath>
 #include "VipSleep.h"
 #include "VipTextOutput.h"
 #include "VipUniqueId.h"
@@ -73,7 +74,7 @@ QStringList VipAnyData::mergeAttributes(const QVariantMap& attrs)
 	return res;
 }
 
-int VipAnyData::memoryFootprint() const
+qint64 VipAnyData::memoryFootprint() const
 {
 	return sizeof(qint64) * 2 + vipGetMemoryFootprint(d_data) + vipGetMemoryFootprint(QVariant::fromValue(m_attributes));
 }
@@ -1085,14 +1086,14 @@ public:
 	// global default values
 	int _list_limit_type;
 	int _max_list_size;
-	int _max_list_memory;
+	qint64 _max_list_memory;
 	QSet<int> _log_errors;
 	bool _lock_list_manager;
 
 	QMutex mutex;
 	int list_limit_type;
 	int max_list_size;
-	int max_list_memory;
+	qint64 max_list_memory;
 	ErrorCodes errors;
 	PriorityMap priorities;
 	QList<VipDataList*> instances;
@@ -1244,7 +1245,7 @@ void VipProcessingManager::setMaxListSize(int size)
 	Q_EMIT instance().changed();
 }
 
-void VipProcessingManager::setMaxListMemory(int size)
+void VipProcessingManager::setMaxListMemory(qint64 size)
 {
 	QMutexLocker lock(&instance().d_data->mutex);
 	instance().d_data->max_list_memory = size;
@@ -1260,7 +1261,7 @@ int VipProcessingManager::maxListSize()
 {
 	return instance().d_data->max_list_size;
 }
-int VipProcessingManager::maxListMemory()
+qint64 VipProcessingManager::maxListMemory()
 {
 	return instance().d_data->max_list_memory;
 }
@@ -1482,7 +1483,7 @@ int VipFIFOList::status() const
 	return m_list.size() > 0 ? (int)m_list.size() : m_last.isValid() ? 0 : -1;
 }
 
-int VipFIFOList::memoryFootprint() const
+qint64 VipFIFOList::memoryFootprint() const
 {
 	_SHAREDSPINLOCKER();
 	int size = 0;
@@ -1645,7 +1646,7 @@ qint64 VipLIFOList::time() const
 		return m_last.time();
 }
 
-int VipLIFOList::memoryFootprint() const
+qint64 VipLIFOList::memoryFootprint() const
 {
 	_SHAREDSPINLOCKER();
 	int size = 0;
@@ -1750,7 +1751,7 @@ qint64 VipLastAvailableList::time() const
 		return d_data.time();
 }
 
-int VipLastAvailableList::memoryFootprint() const
+qint64 VipLastAvailableList::memoryFootprint() const
 {
 	_SHAREDSPINLOCKER();
 	if (m_has_new_data)
@@ -4395,7 +4396,14 @@ VipShapeList VipSceneModelBasedProcessing::shapes()
 	VipSceneModel sm = sceneModel();
 
 	// then use the shape_id property on the VipSceneModel
-	QString shape_id = this->propertyAt(1)->data().value<QString>();
+	// By name, not by position: a session file controls the size of the
+	// shape_ids multi-property, and an emptied one used to make propertyAt(1)
+	// index past the end of the flattened property vector.
+	VipProperty* ids_prop = this->propertyName("shape_ids");
+	if (!ids_prop)
+		return VipShapeList();
+
+	QString shape_id = ids_prop->data().value<QString>();
 	if (!shape_id.isEmpty()) {
 		if (sm.hasGroup(shape_id))
 			return applyTr(sm.shapes(shape_id), d_data->shapeTransform);
@@ -4404,7 +4412,7 @@ VipShapeList VipSceneModelBasedProcessing::shapes()
 	}
 
 	// get the shapes
-	QStringList ids = this->propertyAt(1)->data().value<QStringList>();
+	QStringList ids = ids_prop->data().value<QStringList>();
 	if (!ids.size())
 		return VipShapeList();
 
@@ -4579,21 +4587,26 @@ void VipExtractAttribute::apply()
 
 double VipExtractAttribute::ToDouble(const QVariant& var, bool* ok)
 {
+	// The whole string has to be a number, not merely start with one. The text
+	// stream this used to rely on consumes the longest numeric prefix and still
+	// reports success, so "12abc" produced 12 and "1,5" produced 1, both flagged
+	// valid and sent downstream as measurements. Non finite values are refused
+	// for the same reason.
 	bool work = false;
-	double res = var.toDouble(&work);
-	if (work) {
+	const double res = var.toDouble(&work);
+	if (work && std::isfinite(res)) {
 		if (ok)
-			*ok = work;
+			*ok = true;
 		return res;
 	}
-	else {
-		QString str = var.toString();
-		QTextStream stream(&str, QIODevice::ReadOnly);
-		if ((stream >> res).status() == QTextStream::Ok) {
-			if (ok)
-				*ok = true;
-			return res;
-		}
+
+	// Surrounding whitespace stays tolerated, nothing else.
+	bool converted = false;
+	const double parsed = var.toString().trimmed().toDouble(&converted);
+	if (converted && std::isfinite(parsed)) {
+		if (ok)
+			*ok = true;
+		return parsed;
 	}
 
 	if (ok)
@@ -4661,15 +4674,36 @@ VipArchive& operator<<(VipArchive& stream, const VipMultiInput& minput)
 	return stream;
 }
 
+// An element count read from a session file is untrusted input: it is used
+// directly as a loop bound and, in one case, as an index. Nothing downstream
+// bounds it, and the per-element cost is an allocation plus a registration in a
+// global list, so a crafted file exhausts memory with no message. This is a
+// plausibility cap, not a format limit: no legitimate processing declares
+// thousands of inputs.
+static constexpr int vipMaxSerializedCount = 4096;
+
+static bool vipReadCount(VipArchive& stream, const char* name, int& count)
+{
+	count = 0;
+	if (!stream.content(name, count))
+		return false;
+	if (count < 0 || count > vipMaxSerializedCount) {
+		stream.setError(QString("unexpected element count in archive: %1").arg(count));
+		count = 0;
+		return false;
+	}
+	return true;
+}
+
 VipArchive& operator>>(VipArchive& stream, VipMultiInput& minput)
 {
 	QString name;
 	int count = 0;
-	stream.content("count", count);
+	vipReadCount(stream, "count", count);
 	stream.content("multi_input_name", name);
 	minput.setName(name);
 	minput.clear();
-	for (int i = 0; i < count; ++i) {
+	for (int i = 0; i < count && stream; ++i) {
 		VipInput input;
 		stream.content(input);
 		minput.setAt(i, input);
@@ -4690,11 +4724,11 @@ VipArchive& operator>>(VipArchive& stream, VipMultiOutput& moutput)
 {
 	QString name;
 	int count = 0;
-	stream.content("count", count);
+	vipReadCount(stream, "count", count);
 	stream.content("multi_output_name", name);
 	moutput.setName(name);
 	moutput.clear();
-	for (int i = 0; i < count; ++i) {
+	for (int i = 0; i < count && stream; ++i) {
 		VipOutput output;
 		stream.content(output);
 		moutput.add(output);
@@ -4715,11 +4749,16 @@ VipArchive& operator>>(VipArchive& stream, VipMultiProperty& mproperty)
 {
 	QString name;
 	int count = 0;
-	stream.content("count", count);
+	const bool countRead = vipReadCount(stream, "count", count);
 	stream.content("multi_property_name", name);
 	mproperty.setName(name);
+	// Clearing before the count is known let an absent or corrupt block empty
+	// the multi-property, which permanently removes the flattened properties
+	// the object was built with. Leave it untouched instead.
+	if (!countRead)
+		return stream;
 	mproperty.clear();
-	for (int i = 0; i < count; ++i) {
+	for (int i = 0; i < count && stream; ++i) {
 		VipProperty property;
 		stream.content(property);
 		mproperty.add(property);
@@ -4859,6 +4898,10 @@ VipArchive& operator>>(VipArchive& stream, VipProcessingObject* r)
 			stream.restore();
 	}
 
+	// Mark the object as coming from a file. Its properties are now whatever the
+	// file said, and some processings turn a property into executable code.
+	r->setProperty("_vip_from_archive", true);
+
 	// initialize
 	r->initialize(true);
 	stream.resetError();
@@ -4889,8 +4932,14 @@ VipArchive& operator<<(VipArchive& stream, const VipProcessingList* lst)
 
 VipArchive& operator>>(VipArchive& stream, VipProcessingList* lst)
 {
-	int count = stream.read("count").value<int>();
-	for (int i = 0; i < count; ++i) {
+	// Read as a 64 bit value: the writer stores a container size, so narrowing to
+	// int before the check would let a huge count wrap into a small one.
+	const qlonglong count = stream.read("count").value<qlonglong>();
+	if (count < 0 || count > vipMaxSerializedCount) {
+		stream.setError(QString("unexpected processing count in archive: %1").arg(count));
+		return stream;
+	}
+	for (qlonglong i = 0; i < count && stream; ++i) {
 		VipProcessingObject* obj = stream.read().value<VipProcessingObject*>();
 		if (obj)
 			lst->append(obj);
@@ -4912,7 +4961,7 @@ void serialize_VipDataListManager(VipArchive& arch)
 
 			int limit_type = arch.read("listLimitType").toInt();
 			int max_list_size = arch.read("maxListSize").toInt();
-			int max_memory = arch.read("maxListMemory").toInt();
+			qint64 max_memory = arch.read("maxListMemory").toLongLong();
 			QSet<int> logErrors = arch.read("logErrors").value<QSet<int>>();
 			PriorityMap prio = arch.read("priorities").value<PriorityMap>();
 			bool has_error = arch.hasError();
