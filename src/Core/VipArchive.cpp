@@ -174,6 +174,15 @@ void VipArchive::restore()
 		d_data->saved.pop_back();
 	}
 }
+void VipArchive::discardSave()
+{
+	if (mode() != Read)
+		return;
+	if (d_data->saved.size()) {
+		this->doDiscardSave();
+		d_data->saved.pop_back();
+	}
+}
 void VipArchive::restore(unsigned id) 
 {
 	if (mode() != Read)
@@ -585,6 +594,12 @@ void VipBinaryArchive::doRestore()
 		if (m_device)
 			m_device->seek(pos);
 	}
+}
+
+void VipBinaryArchive::doDiscardSave()
+{
+	if (m_saved_pos.size())
+		m_saved_pos.pop_back();
 }
 
 void VipBinaryArchive::doStart(QString& name, QVariantMap&, bool)

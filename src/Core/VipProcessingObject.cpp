@@ -2368,8 +2368,41 @@ void VipProcessingObject::dirtyProcessingIO(VipProcessingIO* io)
 		this->setSourceProperty(names[i].data(), this->property(names[i].data()));
 }
 
+namespace
+{
+	// Set of nodes already reached by the current descent, held for the outermost
+	// call only. Without it, two processings that are sources of each other
+	// recursed until the stack ran out.
+	struct VisitedSources
+	{
+		static QSet<const VipProcessingObject*>*& current()
+		{
+			static thread_local QSet<const VipProcessingObject*>* set = nullptr;
+			return set;
+		}
+		QSet<const VipProcessingObject*> own;
+		const bool outermost;
+		VisitedSources()
+		  : outermost(current() == nullptr)
+		{
+			if (outermost)
+				current() = &own;
+		}
+		~VisitedSources()
+		{
+			if (outermost)
+				current() = nullptr;
+		}
+	};
+}
+
 void VipProcessingObject::setSourceProperty(const char* name, const QVariant& value)
 {
+	VisitedSources visited;
+	if (VisitedSources::current()->contains(this))
+		return;
+	VisitedSources::current()->insert(this);
+
 	this->setProperty(name, value);
 	this->setProperty((QByteArray("__source_") + name).data(), value);
 	QList<VipProcessingObject*> sources = this->directSources();
@@ -4980,30 +5013,54 @@ VipArchive& operator<<(VipArchive& stream, const VipProcessingObject* r)
 	return stream;
 }
 
+// Only the declared flags, so a value from a file cannot set bits the enumeration
+// does not define.
+static VipProcessingObject::ScheduleStrategies toScheduleStrategies(int value)
+{
+	const int declared = VipProcessingObject::AllInputs | VipProcessingObject::Asynchronous | VipProcessingObject::SkipIfBusy | VipProcessingObject::AcceptEmptyInput |
+			     VipProcessingObject::SkipIfNoInput | VipProcessingObject::NoThread;
+	return static_cast<VipProcessingObject::ScheduleStrategies>(value & declared);
+}
+
 VipArchive& operator>>(VipArchive& stream, VipProcessingObject* r)
 {
-	r->clearConnections();
-
+	// Read first, apply second: the connections used to be dropped on the first
+	// line, so a truncated archive left the object disconnected and half set.
 	QString name;
 	stream.content("processing_name", name);
+	const QVariantMap attributes = stream.read("attributes").value<QVariantMap>();
+	const int strategies = stream.read("scheduleStrategies").toInt();
+	const bool is_enabled = stream.read("isEnabled").toBool();
+	const bool is_visible = stream.read("isVisible").toBool();
+	const bool delete_on_closed = stream.read("deleteOnOutputConnectionsClosed").toBool();
+
+	if (stream.hasError()) {
+		stream.resetError();
+		return stream;
+	}
+
+	r->clearConnections();
 	r->setObjectName(name);
 
 	// set the attributes, but keep the 'Name' one (used in VipIODevice)
-	name = r->attribute("Name").toString();
-	r->setAttributes(stream.read("attributes").value<QVariantMap>());
-	if (!name.isEmpty())
-		r->setAttribute("Name", name);
+	const QString kept_name = r->attribute("Name").toString();
+	r->setAttributes(attributes);
+	if (!kept_name.isEmpty())
+		r->setAttribute("Name", kept_name);
 
-	r->setScheduleStrategies((VipProcessingObject::ScheduleStrategies)stream.read("scheduleStrategies").toInt());
-	r->setEnabled(stream.read("isEnabled").toBool());
-	r->setProcessingVisible(stream.read("isVisible").toBool());
-	r->setDeleteOnOutputConnectionsClosed(stream.read("deleteOnOutputConnectionsClosed").toBool());
+	r->setScheduleStrategies(toScheduleStrategies(strategies));
+	r->setEnabled(is_enabled);
+	r->setProcessingVisible(is_visible);
+	r->setDeleteOnOutputConnectionsClosed(delete_on_closed);
 
 	// added in 2.2.14
 	// find the registered processing info (if any)
 	stream.save();
 	QString registered;
 	if (stream.content("registered", registered)) {
+		// The save point is dropped, not rewound: leaving it on the stack made the
+		// next restore() of an enclosing reader rewind to this position.
+		stream.discardSave();
 		if (registered.size()) {
 			// find the corresponding info object
 			const QList<VipProcessingObject::Info> infos = VipProcessingObject::additionalInfoObjects();

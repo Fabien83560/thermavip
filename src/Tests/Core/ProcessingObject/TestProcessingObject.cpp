@@ -807,6 +807,44 @@ private Q_SLOTS:
 		}
 		QCOMPARE(read, written);
 	}
+
+	/// The descent along the sources had no visited set, so two processings that
+	/// are sources of each other recursed until the stack ran out.
+	void aCycleInTheSourcesDoesNotRecurseForever()
+	{
+		MultiplyByProperty first;
+		MultiplyByProperty second;
+		QVERIFY(first.outputAt(0)->setConnection(second.inputAt(0)));
+		QVERIFY(second.outputAt(0)->setConnection(first.inputAt(0)));
+		QVERIFY(first.directSources().contains(&second));
+		QVERIFY(second.directSources().contains(&first));
+
+		first.setSourceProperty("campaign", QVariant(7));
+
+		QCOMPARE(first.property("campaign").toInt(), 7);
+		QCOMPARE(second.property("campaign").toInt(), 7);
+	}
+
+	/// The reader dropped the connections and wrote the object as it went, so an
+	/// archive that stops after the first field left a disconnected object
+	/// carrying default values. It now applies nothing at all.
+	void aTruncatedProcessingArchiveLeavesTheObjectAlone()
+	{
+		const QString xml = QStringLiteral("<processing type_name=\"VipClamp*\">"
+						   "<processing_name type_name=\"QString\">from_file</processing_name>"
+						   "</processing>");
+
+		VipClamp target;
+		target.setObjectName("original");
+		target.setProcessingVisible(true);
+
+		VipXIStringArchive in(xml);
+		QVERIFY(in.isOpen());
+		in.content("processing", &target);
+
+		QCOMPARE(target.objectName(), QString("original"));
+		QVERIFY2(target.isProcessingVisible(), "a field that was never read must not be applied");
+	}
 };
 
 VIP_TEST_MAIN(TestProcessingObject)
