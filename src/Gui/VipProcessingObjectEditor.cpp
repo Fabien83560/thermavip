@@ -539,6 +539,10 @@ void VipFindDataButton::elideText()
 
 void VipFindDataButton::menuShow()
 {
+	// clear() only destroys the actions the menu owns, and the action of a
+	// submenu belongs to that submenu: the submenus built below outlived every
+	// opening of this popup.
+	qDeleteAll(this->menu()->findChildren<QMenu*>(QString(), Qt::FindDirectChildrenOnly));
 	this->menu()->clear();
 	// compute the list of all players in the current workspace
 	if (VipDisplayPlayerArea* w = vipGetMainWindow()->displayArea()->currentDisplayPlayerArea()) {
@@ -554,7 +558,7 @@ void VipFindDataButton::menuShow()
 				// if the player has more than one display object, store them in a submenu
 				QMenu* current = menu();
 				if (objects.size() > 1) {
-					current = new QMenu("Player " + parent->windowTitle());
+					current = new QMenu("Player " + parent->windowTitle(), menu());
 					current->setToolTipsVisible(true);
 				}
 
@@ -2685,10 +2689,10 @@ void VipDirectoryReaderEditor::setDirectoryReader(VipDirectoryReader* reader)
 		}
 		// options when the device is already opened
 		else {
-			// remove the previous editors
-			while (d_data->editors.size())
-				if (d_data->editors.begin().value())
-					delete d_data->editors.begin().value();
+			// remove the previous editors. Destroying an entry does not take it out
+			// of the map, so the loop that used to drain it never lost an element:
+			// it either deleted the same pointer twice or spun forever.
+			qDeleteAll(d_data->editors);
 			d_data->editors.clear();
 
 			// compute all device types and add the editors
@@ -4035,6 +4039,13 @@ void VipWarpingEditor::LoadTransform()
 			QVector<QPointF> warp((int)(bytes / pointSize));
 			if (in.read((char*)warp.data(), bytes) != bytes) {
 				VIP_LOG_ERROR("VipWarping: truncated warping file " + filename);
+				return;
+			}
+			// The processing is held by a QPointer and the file dialog above is a
+			// window of reentrancy: the guard belongs here, next to the use, as the
+			// saving slot has it.
+			if (!d_data->warping) {
+				VIP_LOG_ERROR("VipWarping: no warping processing attached");
 				return;
 			}
 			d_data->warping->setWarping(vipToPointVector( warp));
@@ -5859,9 +5870,15 @@ void VipProcessingEditorToolWidget::itemClicked(const VipPlotItemPointer& item, 
 {
 	// bool selected = item->isSelected();
 	// bool visible =  isVisible();
+	// The connection that reaches this slot is queued, and the item is held by a
+	// QPointer: it can be gone by the time the call is delivered. The test was one
+	// line too late.
+	if (!item)
+		return;
+
 	VipDisplayObject* display = item->property("VipDisplayObject").value<VipDisplayObject*>();
 
-	if (item && button == VipPlotItem::LeftButton && display && isVisible()) {
+	if (button == VipPlotItem::LeftButton && display && isVisible()) {
 		setProcessingObject(display);
 		this->setWindowTitle("Edit processing - " + item->title().text());
 	}
