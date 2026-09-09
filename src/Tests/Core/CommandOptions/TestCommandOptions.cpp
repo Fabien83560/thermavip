@@ -81,6 +81,38 @@ private Q_SLOTS:
 		QCOMPARE(options.value("target").toString(), QString("result.txt"));
 		QVERIFY(!options.positional().contains(QStringLiteral("result.txt")));
 	}
+
+	/// The name to option map cached raw pointers into a QList held by value, so
+	/// every append moved the elements and left those pointers on freed memory.
+	/// parse() writes through them while count() rescans the live list, so an
+	/// option registered before the table grew never records anything.
+	void anOptionSurvivesTheTableGrowing()
+	{
+		VipCommandOptions& options = VipCommandOptions::instance();
+		options.setFlagStyle(VipCommandOptions::DoubleDash);
+		options.add("early");
+		for (int i = 0; i < 64; ++i)
+			options.add(QStringLiteral("filler%1").arg(i));
+
+		options.parse(QStringList() << "app" << "--early");
+
+		QCOMPARE(options.count("early"), 1);
+	}
+
+	/// The singleton reset the style on every access, so setFlagStyle() had no
+	/// lasting effect and no caller could pick another convention.
+	void theFlagStyleSurvivesTheNextAccess()
+	{
+		VipCommandOptions::instance().setFlagStyle(VipCommandOptions::Slash);
+		QCOMPARE(VipCommandOptions::instance().flagStyle(), VipCommandOptions::Slash);
+
+		VipCommandOptions& options = VipCommandOptions::instance();
+		options.add("slashed");
+		options.parse(QStringList() << "app" << "/slashed");
+		QCOMPARE(options.count("slashed"), 1);
+
+		VipCommandOptions::instance().setFlagStyle(VipCommandOptions::DoubleDash);
+	}
 };
 
 VIP_TEST_MAIN(TestCommandOptions)
