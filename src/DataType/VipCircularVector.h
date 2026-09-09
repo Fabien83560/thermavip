@@ -319,12 +319,16 @@ namespace detail
 		  : d(std::exchange(o.d, nullptr))
 		{
 		}
-		COWPointer& operator=(const COWPointer& o) noexcept
+		COWPointer& operator=(const COWPointer& o)
 		{
-			if (d)
-				delete d;
-			d = nullptr;
-			d = (o.d ? new T(*o.d) : nullptr);
+			// Self assignment used to free the source before reading it. Building the
+			// copy first also keeps the object intact if the allocation throws, which
+			// is why this is no longer noexcept.
+			if (this == &o)
+				return *this;
+			T* copy = (o.d ? new T(*o.d) : nullptr);
+			delete d;
+			d = copy;
 			return *this;
 		}
 		COWPointer& operator=(COWPointer&& o) noexcept

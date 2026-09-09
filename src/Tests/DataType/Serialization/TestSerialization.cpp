@@ -476,6 +476,23 @@ private Q_SLOTS:
 		QCOMPARE(vipHashValue((quint8)7), vipHashValue((quint8)7));
 		QVERIFY(vipHashValue(1.5f) != vipHashValue(2.5f));
 	}
+
+	/// Assigning a strongly owning vector to itself freed its data before reading
+	/// it. The shared ownership specialisation of the same pointer guards against
+	/// it; this one did not.
+	void aVectorSurvivesBeingAssignedToItself()
+	{
+		VipCircularVector<QString, Vip::StrongOwnership> vec;
+		vec.push_back(QStringLiteral("first"));
+		vec.push_back(QStringLiteral("second"));
+
+		VipCircularVector<QString, Vip::StrongOwnership>& alias = vec;
+		vec = alias;
+
+		QCOMPARE(vec.size(), (qsizetype)2);
+		QCOMPARE(vec[0], QStringLiteral("first"));
+		QCOMPARE(vec[1], QStringLiteral("second"));
+	}
 };
 
 VIP_TEST_MAIN(TestSerialization)

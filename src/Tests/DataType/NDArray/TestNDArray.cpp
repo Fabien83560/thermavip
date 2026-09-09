@@ -9,6 +9,8 @@
 #include "vip_test_main.h"
 
 #include "VipNDArray.h"
+#include "VipMultiNDArray.h"
+#include "VipNDArrayStatistics.h"
 #include "VipStack.h"
 
 #include <vector>
@@ -151,6 +153,59 @@ private Q_SLOTS:
 
 		VipNDArray narrow(qMetaTypeId<double>(), vipVector(4, 2));
 		QVERIFY2(!vipStack(narrow, VipNDArray(a), VipNDArray(b), 0), "a destination that is too narrow must be refused");
+	}
+
+	/// The cumulative product left its first factor out: the branch that handles
+	/// the first element set the accumulator to the neutral element and returned,
+	/// so that element never multiplied in.
+	void theCumulativeProductKeepsItsFirstFactor()
+	{
+		VipNDArrayType<double> ar(vipVector(4));
+		ar(vipVector(0)) = 2;
+		ar(vipVector(1)) = 3;
+		ar(vipVector(2)) = 5;
+		ar(vipVector(3)) = 7;
+
+		QCOMPARE(vipArrayCumMultiply<double>(ar), 210.0);
+
+		VipNDArrayType<double> single(vipVector(1));
+		single(vipVector(0)) = 4;
+		QCOMPARE(vipArrayCumMultiply<double>(single), 4.0);
+	}
+
+	/// Replacing the whole table of a multi array left the pointer to the current
+	/// one on a destroyed element, and the name kept beside it stopped the
+	/// insertion loop from ever pointing it somewhere valid again.
+	void replacingTheNamedArraysLeavesNoDanglingCurrent()
+	{
+		VipMultiNDArray multi;
+		multi.addArray("first", VipNDArray(VipNDArrayType<double>(vipVector(2))));
+		multi.setCurrentArray("first");
+		QCOMPARE(multi.currentArrayName(), QString("first"));
+
+		QMap<QString, VipNDArray> replacement;
+		replacement.insert("second", VipNDArray(VipNDArrayType<double>(vipVector(3))));
+		multi.setNamedArrays(replacement);
+
+		QCOMPARE(multi.namedArrays().size(), 1);
+		QVERIFY(multi.namedArrays().contains("second"));
+		QCOMPARE(multi.currentArrayName(), QString("second"));
+		QCOMPARE(multi.shape(), vipVector(3));
+	}
+
+	/// The comparator used to sort the candidate types said a type was under
+	/// itself, which is not the ordering std::sort requires; a duplicate in the
+	/// list is enough to reach it.
+	void theTypeOrderingIsIrreflexive()
+	{
+		QList<int> types;
+		for (int i = 0; i < 40; ++i) {
+			types << qMetaTypeId<double>() << qMetaTypeId<int>() << qMetaTypeId<float>();
+			types << qMetaTypeId<quint8>() << qMetaTypeId<qint64>();
+		}
+
+		const int higher = vipHigherArrayType(qMetaTypeId<int>(), types);
+		QVERIFY(higher != 0);
 	}
 };
 

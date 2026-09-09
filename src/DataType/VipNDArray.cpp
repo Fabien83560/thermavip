@@ -906,7 +906,10 @@ int vipHigherArrayType(const QVector<VipNDArray>& in)
 
 static bool isUnder(int t1, int t2)
 {
-	return vipHigherArrayType(t1, t2) == t2;
+	// Not for two equal types: a comparator that says one is under itself breaks
+	// the strict weak ordering std::sort requires, and a duplicate in the list is
+	// enough to reach it.
+	return t1 != t2 && vipHigherArrayType(t1, t2) == t2;
 }
 
 int vipHigherArrayType(int dtype, const QList<int>& possible_types)
