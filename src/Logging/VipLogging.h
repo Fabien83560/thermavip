@@ -124,7 +124,8 @@ public:
 	Q_DECLARE_FLAGS(Levels, Level);
 
 	VipLogging();
-	VipLogging(Outputs outputs, VipFileLogger* logger);
+	/// Takes ownership of \p logger, which must come from new.
+	VipLogging(Outputs outputs, std::unique_ptr<VipFileLogger> logger);
 	VipLogging(Outputs outputs, const QString& identifier = QString());
 	~VipLogging();
 
@@ -155,7 +156,10 @@ public:
 	/// Set the log identifier.
 	/// This will close any previously opened shared memory.
 	/// Returns true on success, false otherwise.
-	bool open(Outputs outputs, VipFileLogger* logger);
+	/// Takes ownership of \p logger, which must come from new: it is held in a
+	/// shared pointer and destroyed with this object. The type says so, so the
+	/// caller cannot keep a second owner by mistake.
+	bool open(Outputs outputs, std::unique_ptr<VipFileLogger> logger);
 	bool open(Outputs outputs, const QString& identifier = QString());
 	bool isOpen() const;
 	void close();
@@ -291,9 +295,12 @@ namespace details
 	{
 		return str.data();
 	}
-	static inline const char* __build_str(const QString& str)
+	// Returns the buffer holder, not a pointer into a temporary one: the conversion
+	// produces a QByteArray by value, and its buffer was already gone when the
+	// caller received the pointer.
+	static inline QByteArray __build_str(const QString& str)
 	{
-		return str.toLatin1().data();
+		return str.toLatin1();
 	}
 
 	template<int N>

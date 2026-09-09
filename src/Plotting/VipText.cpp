@@ -1613,9 +1613,12 @@ VipTextObject::VipTextObject(const VipTextObject& other)
 	VIP_CREATE_PRIVATE_DATA(*other.d_data);
 }
 
-VipTextObject::VipTextObject(VipTextObject&& other) noexcept
-  : d_data(std::move(other.d_data))
+VipTextObject::VipTextObject(VipTextObject&& other)
 {
+	// The private data moves; the block that carries it stays bound to the object
+	// that owns it. Moving the block itself left it pointing at the source, which
+	// then took the deregistration and the destroyed signal of this one.
+	VIP_CREATE_PRIVATE_DATA(std::move(*other.d_data));
 }
 
 VipTextObject::~VipTextObject() = default;
@@ -1625,9 +1628,9 @@ VipTextObject& VipTextObject::operator=(const VipTextObject& other)
 	*d_data = *other.d_data;
 	return *this;
 }
-VipTextObject& VipTextObject::operator=( VipTextObject&& other) noexcept
+VipTextObject& VipTextObject::operator=(VipTextObject&& other) noexcept
 {
-	d_data = std::move(other.d_data);
+	*d_data = std::move(*other.d_data);
 	return *this;
 }
 

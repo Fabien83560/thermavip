@@ -246,7 +246,12 @@ const QMap<QString, VipNDArray>& VipMultiNDArray::namedArrays() const noexcept
 }
 void VipMultiNDArray::setNamedArrays(const QMap<QString, VipNDArray>& ars)
 {
+	// The current array is a raw pointer into the table: clearing the table alone
+	// left it on a destroyed element, and the name kept beside it stopped the loop
+	// below from ever pointing it somewhere valid again.
 	handle()->arrays.clear();
+	handle()->current.clear();
+	handle()->setCurrentArray(QString());
 	for (QMap<QString, VipNDArray>::const_iterator it = ars.begin(); it != ars.end(); ++it)
 		handle()->addArray(it.key(), it.value());
 }

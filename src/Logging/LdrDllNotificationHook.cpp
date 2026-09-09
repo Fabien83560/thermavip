@@ -186,6 +186,13 @@ BOOL HookLdrDllNotifications(PLDR_DLL_NOTIFICATION_FUNCTION_HOOK hook)
 
 	pLdrUnregisterDllNotification(cookie);
 
+	// The block chained below lives in the data of this module and points at code
+	// of this module. Nothing releases it automatically, so pin the module for the
+	// life of the process rather than leave the loader walking into memory that an
+	// unload would have taken away.
+	HMODULE self = nullptr;
+	GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCWSTR>(&FirstNotificationFunction), &self);
+
 	g_hookDllNotification = hook;
 
 	g_hookDllNotificationBlock.NotificationFunction = FirstNotificationFunction;
@@ -197,6 +204,12 @@ BOOL HookLdrDllNotifications(PLDR_DLL_NOTIFICATION_FUNCTION_HOOK hook)
 
 void UnhookLdrDllNotifications()
 {
+	// Nothing installed: the block is a zero initialised static, and unlinking it
+	// writes through a null pointer. Called without a successful Hook, which is
+	// what an ignored failure produces, this used to take the process down.
+	if (!g_hookDllNotificationBlock.Links.Flink || !g_hookDllNotificationBlock.Links.Blink)
+		return;
+
 	PLIST_ENTRY head = g_hookDllNotificationBlock.Links.Blink;
 
 	// Note: The operations below aren't thread-safe and are prone to races.

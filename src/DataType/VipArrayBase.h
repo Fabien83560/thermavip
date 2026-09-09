@@ -175,8 +175,12 @@ struct VIP_DATA_TYPE_EXPORT VipNDArrayHandle : public QSharedData
 	/// Returns the data pointer at given position.
 	///  This function should only return a non nullptr value if the array is based on a dynamic flat array.
 	virtual void* dataPointer(const VipNDArrayShape&) const = 0;
-	/// Realloc the data with a new shape
+	/// Realloc the data with a new shape.
+	/// Returns false and leaves the handle untouched if the allocation fails.
 	virtual bool realloc(const VipNDArrayShape&) = 0;
+	/// Tell whether this handle must release its buffer. A handle built on a
+	/// pointer somebody else owns is told once, at construction.
+	virtual void setOwnsData(bool) {}
 	/// Change the shape of the array without touching to the data
 	virtual bool reshape(const VipNDArrayShape& new_shape) = 0;
 
@@ -501,8 +505,12 @@ namespace detail
 			shape = other.shape;
 			strides = other.strides;
 			size = other.size;
-			opaque = other.opaque;
-			if (size) {
+			// Never the pointer of the other one: with a size of zero the deep copy
+			// below was skipped and both handles owned the same block. The test is
+			// on the buffer as well as on the size, since a failed allocation leaves
+			// a size without a buffer.
+			opaque = nullptr;
+			if (size && other.opaque) {
 				opaque = new T[size];
 				if constexpr (std::is_trivial_v<T>)
 					memcpy(opaque, other.opaque, size * sizeof(T));
@@ -528,17 +536,29 @@ namespace detail
 
 		virtual bool realloc(const VipNDArrayShape& new_shape)
 		{
-			if (opaque) 
-				deleteInternal();
+			// Allocate before publishing: the shape, the strides and the size used
+			// to be written first, so an allocation that failed left the handle
+			// describing an array that does not exist, with a size and no buffer.
+			VipNDArrayShape new_strides;
+			const qsizetype new_size = vipComputeDefaultStrides<Vip::FirstMajor>(new_shape, new_strides);
+			T* new_data = nullptr;
+			if (new_size > 0) {
+				new_data = new (std::nothrow) T[new_size];
+				if (!new_data)
+					return false;
+			}
 
+			deleteInternal();
 			shape = new_shape;
-			size = vipComputeDefaultStrides<Vip::FirstMajor>(shape, strides);
-			if (size)
-				opaque = new T[size];
+			strides = new_strides;
+			size = new_size;
+			opaque = new_data;
+			own = true;
 			// remove deleter
 			deleter = VipDeleteFunction();
 			return true;
 		}
+		virtual void setOwnsData(bool o) { own = o; }
 		virtual void* opaqueForPos(void* op, const VipNDArrayShape& pos) const { return static_cast<T*>(op) + vipFlatOffset<false>(strides, pos); }
 		
 		virtual const char* dataName() const { return vipTypeName(qMetaTypeId<T>()); }
@@ -833,6 +853,10 @@ namespace detail
 		  : handle(vipCreateArrayHandle(Standard, type, ptr, sh, VipDeleteFunction()))
 		  , pointerView(true)
 		{
+			// Said once, at construction: the destructor used to clear the buffer of
+			// the shared handle instead, which pulled it from under every other view
+			// built on the same one.
+			const_cast<VipNDArrayHandle*>(handle.data())->setOwnsData(false);
 			opaque = this->ptr = handle->opaque;
 			strides = _strides;
 			size = handle->size;
@@ -844,11 +868,7 @@ namespace detail
 				const_cast<VipNDArrayHandle*>(handle.data())->strides = strides;
 		}
 
-		~ViewHandle()
-		{
-			if (pointerView) // for pointer view, the handle must not delete its data
-				const_cast<VipNDArrayHandle*>(handle.data())->opaque = nullptr;
-		}
+		~ViewHandle() {}
 		virtual ViewHandle* copy() const { return new ViewHandle(*this); }
 		virtual void* dataPointer(const VipNDArrayShape& pos) const { return handle->dataPointer(pos + start); }
 		virtual bool reshape(const VipNDArrayShape&) { return false; }

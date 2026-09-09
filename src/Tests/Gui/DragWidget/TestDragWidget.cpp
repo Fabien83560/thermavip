@@ -160,6 +160,44 @@ private Q_SLOTS:
 
 		QCOMPARE(widget.visibility(), VipBaseDragWidget::Minimized);
 	}
+
+	/// The row and cell accessors were plain shortcuts with no domain: a splitter
+	/// returns null out of range, and its last child is a sentinel, a bare widget,
+	/// which both used to be cast and returned. indexOf() answers (-1, -1) for a
+	/// widget the parent does not hold, and that -1 reached them.
+	void layoutAccessorsRefuseAnIndexOutsideTheGrid()
+	{
+		VipMultiDragWidget widget;
+		widget.mainResize(2);
+		widget.subResize(0, 2);
+
+		QVERIFY2(widget.subSplitter(-1) == nullptr, "a negative row must not be dereferenced");
+		QVERIFY2(widget.subSplitter(widget.mainCount()) == nullptr, "the sentinel row must not be returned as a splitter");
+		QVERIFY(widget.subSplitter(0) != nullptr);
+
+		QVERIFY(widget.tabWidget(-1, 0) == nullptr);
+		QVERIFY(widget.tabWidget(0, -1) == nullptr);
+		QVERIFY2(widget.tabWidget(0, widget.subCount(0)) == nullptr, "the sentinel cell must not be returned as a tab widget");
+		QVERIFY(widget.tabWidget(0, 0) != nullptr);
+
+		QCOMPARE(widget.subCount(-1), 0);
+		QCOMPARE(widget.subCount(widget.mainCount()), 0);
+	}
+
+	/// A widget the parent does not hold gives (-1, -1), which used to be used as
+	/// a row index straight away.
+	void indexOfAnUnknownWidgetIsNegative()
+	{
+		VipMultiDragWidget widget;
+		widget.mainResize(1);
+		widget.subResize(0, 1);
+
+		VipDragWidget stranger;
+		const QPoint pos = widget.indexOf(&stranger);
+
+		QCOMPARE(pos, QPoint(-1, -1));
+		QVERIFY(widget.subSplitter(pos.y()) == nullptr);
+	}
 };
 
 VIP_TEST_MAIN(TestDragWidget)

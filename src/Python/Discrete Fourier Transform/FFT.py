@@ -105,14 +105,18 @@ class ThermavipRFFT(th.ThermavipPyProcessing):
 
     def apply(self, data, time):
         
-        if len(data.shape) == 1:
-            res =fftp.rfft(data)
-        elif len(data.shape) == 2:
-            res =fftp.rfft2(data)
-        else:
-            res =fftp.rfftn(data)  
-        return res
+        # The module this file transforms with exposes no rfft2 and no rfftn: those
+        # two branches raised an attribute error on every image. The one dimensional
+        # transform is the one that is implemented, and the length it returns is the
+        # one the base class writes back.
+        if len(data.shape) != 1:
+            raise RuntimeError('RFFT: only 1D signals are supported, got shape ' + str(data.shape))
+        return fftp.rfft(data)
         
+    def dims(self):
+        # One dimension only, so the interface stops offering this on an image.
+        return (1,1)
+
     def unit(self, index, name):
         # A transform changes the quantity: the abscissa was left labelled with the
         # unit of the input, and the ordinate too.
@@ -145,14 +149,15 @@ class ThermavipIRFFT(th.ThermavipPyProcessing):
         
         # irfft already returns a real array, so taking the modulus was not only
         # wrong but redundant: it rectified the result.
-        if len(data.shape) == 1:
-            res = fftp.irfft(data)
-        elif len(data.shape) == 2:
-            res = fftp.irfft2(data)
-        else:
-            res = fftp.irfftn(data)
+        if len(data.shape) != 1:
+            raise RuntimeError('IRFFT: only 1D signals are supported, got shape ' + str(data.shape))
+        res = fftp.irfft(data)
         return res
         
+    def dims(self):
+        # One dimension only, so the interface stops offering this on an image.
+        return (1,1)
+
     def unit(self, index, name):
         # A transform changes the quantity: the abscissa was left labelled with the
         # unit of the input, and the ordinate too.

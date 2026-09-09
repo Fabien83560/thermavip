@@ -209,12 +209,14 @@ public:
 	void setError(const QString& err, int code = -1) { setError(VipErrorData(err, code)); }
 	void setError(VipErrorData&& err)
 	{
+		// err was moved from, so reading it again gave the extension point and the
+		// signal an empty error. Report the object that now holds it.
 		VipErrorData* error = new VipErrorData(std::move(err));
 		VipErrorData* prev = d_data.exchange(error);
 		if (prev != _null_error())
 			delete prev;
-		newError(err);
-		emitError(this, err);
+		newError(*error);
+		emitError(this, *error);
 	}
 	void setError(const VipErrorData& err)
 	{
@@ -264,6 +266,11 @@ class VipProcessingObject;
 
 typedef QMap<QString, QThread::Priority> PriorityMap;
 Q_DECLARE_METATYPE(PriorityMap)
+
+/// Serialise the priorities as key and value. Any value outside QThread::Priority
+/// falls back to QThread::InheritPriority.
+VIP_CORE_EXPORT QDataStream& operator<<(QDataStream& str, const PriorityMap& map);
+VIP_CORE_EXPORT QDataStream& operator>>(QDataStream& str, PriorityMap& map);
 
 /// VipProcessingManager manages the default configuration of all new VipDataList instances and VipProcessingObject instances.
 /// When a VipDataList is created, its data limit type, max list size and max memory size are set respectively to
@@ -861,10 +868,14 @@ public:
 	{
 		if (count() >= d_data->max_size)
 			return false;
+		if (pos < 0 || pos > d_data->vector.size())
+			return false;
 		TYPE* t = new TYPE(val);
 		t->setParentProcessing(parentProcessing());
 		d_data->vector.insert(pos, t);
-		added(d_data->vector.back());
+		// back(), not the element just inserted: anything but an append configured
+		// the wrong entry and left the new one unset. setAt() below writes it right.
+		added(t);
 		dirtyParentProcessingIO(this);
 		return true;
 	}
@@ -902,8 +913,12 @@ public:
 		if (size < 0)
 			size = 0;
 		if (size < count()) {
-			for (int i = size; i < count(); ++i)
+			// clear() and clearConnection() close the connection before destroying;
+			// these two paths did not, leaving the other end pointing at a dead object.
+			for (int i = size; i < count(); ++i) {
+				d_data->vector[i]->clearConnection();
 				delete d_data->vector[i];
+			}
 			d_data->vector.resize(size);
 			dirtyParentProcessingIO(this);
 		}
@@ -919,6 +934,9 @@ public:
 	{
 		if (count() <= d_data->min_size)
 			return false;
+		if (index < 0 || index >= d_data->vector.size())
+			return false;
+		d_data->vector[index]->clearConnection();
 		delete d_data->vector[index];
 		d_data->vector.removeAt(index);
 		dirtyParentProcessingIO(this);
@@ -950,11 +968,17 @@ public:
 	/// Returns the VipProcessingIO at given index
 	const TYPE* at(int index) const { return d_data->vector[index]; }
 	/// Reimplemented from #VipProcessingIO::data().
-	/// Returns the the data of the last VipProcessingIO.
-	virtual VipAnyData data() const { return d_data->vector.back()->data(); }
+	/// Returns the data of the last VipProcessingIO, or an empty one when there is
+	/// none: this container is documented as empty by default, and back() on it is
+	/// out of bounds.
+	virtual VipAnyData data() const { return d_data->vector.isEmpty() ? VipAnyData() : d_data->vector.back()->data(); }
 	/// Reimplemented from #VipProcessingIO::setData().
-	/// Set the data of the last VipProcessingIO.
-	virtual void setData(const VipAnyData& d) { d_data->vector.back()->setData(d); }
+	/// Set the data of the last VipProcessingIO. Does nothing when there is none.
+	virtual void setData(const VipAnyData& d)
+	{
+		if (!d_data->vector.isEmpty())
+			d_data->vector.back()->setData(d);
+	}
 	/// Clear all VipProcessingIO connections
 	virtual void clearConnection()
 	{
@@ -1805,15 +1829,23 @@ public:
 	/// @brief Setup all output connections for this processing. This function does not need to be called for direct connections.
 	/// \sa VipConnection::setupConnection.
 	void setupOutputConnections(const QString& address);
+	/// @brief Returns true once the destructor of this object has started.
+	/// The object stays visible to the global registry until the base destructor
+	/// runs, and must not be used any more from that point.
+	bool isBeingDestroyed() const noexcept;
+
 	/// @brief Open all input connections. This function does not need to be called for direct connections.
+	/// Returns false if at least one connection could not be opened.
 	/// \sa VipConnection::openConnection
-	void openInputConnections();
+	bool openInputConnections();
 	/// @brief Open all output connections. This function does not need to be called for direct connections.
+	/// Returns false if at least one connection could not be opened.
 	/// \sa VipConnection::openConnection
-	void openOutputConnections();
+	bool openOutputConnections();
 
 	/// @brief Open all connections. It starts first by the outputs and then the inputs/properties.
-	void openAllConnections();
+	/// Returns false if at least one connection could not be opened.
+	bool openAllConnections();
 
 	/// @brief Call VipConnection::removeProcessingPoolFromAddress() for all inputs/properties
 	void removeProcessingPoolFromAddresses();

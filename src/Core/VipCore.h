@@ -521,7 +521,7 @@ public:
 /// This function works for standard data types: numerical values, QString and QByteArray, VipNDArray, VipIntervalSampleVector, VipPointVector, etc.
 /// It is possible to define additional memory computation functions for custom types using vipRegisterMemoryFootprintFunction().
 /// If the data type is not handled, 0 is returned.
-VIP_CORE_EXPORT int vipGetMemoryFootprint(const QVariant& v);
+VIP_CORE_EXPORT qint64 vipGetMemoryFootprint(const QVariant& v);
 
 /// Register, for a given Qt meta type id, a function that computes the memory footprint of a QVariant.
 /// This function will be used in vipGetMemoryFootprint().

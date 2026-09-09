@@ -147,10 +147,19 @@ void VipPyFunctionProcessing::mergeData(int, int)
 	// send function
 	{
 		VipGILLocker lock;
-		PyObject* __main__ = PyImport_ImportModule("__main__");
-		PyObject* globals = PyModule_GetDict(__main__);
-		Py_DECREF(__main__);
+		PyObject* main_module = PyImport_ImportModule("__main__");
+		if (!main_module) {
+			// The import can fail, and both calls below dereference their argument.
+			PyErr_Clear();
+			setError("cannot access the Python __main__ module", VipProcessingObject::WrongInput);
+			outputAt(0)->setData(out);
+			return;
+		}
+		// A borrowed reference, valid only while the module is: release the module
+		// after using it, not before.
+		PyObject* globals = PyModule_GetDict(main_module);
 		int r = PyDict_SetItemString(globals, "fun", d_data->function);
+		Py_DECREF(main_module);
 		if (r != 0) {
 			d_data->lastError = VipPyError(compute_error_t{});
 			if (!d_data->lastError.isNull()) {

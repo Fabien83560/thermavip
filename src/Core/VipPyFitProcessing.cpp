@@ -170,10 +170,31 @@ static void gaussianStartParams(const VipPointVector& pts, double& a, double& b,
 	b = max_x;
 	a = (max - min);
 
-	if (a != 0)
-		c = (pts[1].x() - b) / (sqrt(-log((pts[1].y() - d) / a)));
-	if (vipIsNan(c))
-		c = 1;
+	// The width, estimated at the first point that crosses half the height, not at
+	// the point of index 1, which has no relation to the curve: for that point the
+	// ratio is one at the maximum, where the logarithm is zero and the division is
+	// by zero, and zero at the minimum, where the width itself becomes zero and the
+	// model divides by it. The guard only caught one of those three states.
+	c = 0;
+	if (a != 0) {
+		const double half = d + a * 0.5;
+		for (int i = 0; i < pts.size(); ++i) {
+			const double ratio = (pts[i].y() - d) / a;
+			if (ratio <= 0 || ratio >= 1)
+				continue;
+			const double width = qAbs(pts[i].x() - b) / sqrt(-log(ratio));
+			if (width > 0 && !vipIsNan(width) && !vipIsInf(width)) {
+				c = width;
+				break;
+			}
+		}
+		Q_UNUSED(half);
+	}
+	if (vipIsNan(c) || vipIsInf(c) || c == 0) {
+		// A quarter of the window, which is homogeneous with the data.
+		const double span = qAbs(pts.last().x() - pts.first().x());
+		c = span > 0 ? span / 4. : 1.;
+	}
 }
 
 static QVariantList applyCurveFit(const VipAnyData& any,

@@ -509,6 +509,34 @@ QDataStream& operator<<(QDataStream& stream, const VipNDArray& ar)
 	return stream;
 }
 
+// A shape read from a stream sizes an allocation on its own. The elements have
+// not been read yet, so a shape asking for more bytes than the stream still holds
+// cannot be honoured, whatever the element size. The products are checked for
+// overflow: a shape that wraps would allocate less than the caller then writes.
+static bool vipPlausibleArrayShape(QDataStream& s, const VipNDArrayShape& shape, qsizetype element_size)
+{
+	if (element_size <= 0)
+		return false;
+
+	const qsizetype limit = std::numeric_limits<qsizetype>::max();
+	qsizetype count = 1;
+	for (qsizetype i = 0; i < shape.size(); ++i) {
+		const qsizetype dim = shape[i];
+		if (dim < 0)
+			return false;
+		if (dim != 0 && count > limit / dim)
+			return false;
+		count *= dim;
+	}
+	if (count > limit / element_size)
+		return false;
+
+	const qsizetype bytes = count * element_size;
+	if (s.device() && !s.device()->isSequential() && bytes > s.device()->bytesAvailable())
+		return false;
+	return true;
+}
+
 QDataStream& operator>>(QDataStream& stream, VipNDArray& ar)
 {
 	ar.clear();
@@ -530,11 +558,19 @@ QDataStream& operator>>(QDataStream& stream, VipNDArray& ar)
 		stream >> shape;
 	}
 
-	VipSharedHandle h = vipCreateArrayHandle(handle_type, data_type, shape);
+	VipSharedHandle h = vipCreateArrayHandle(handle_type, data_type);
 	if (vipIsNullArray(h.constData()))
 		return stream;
 
-	h->size = vipComputeDefaultStrides<Vip::FirstMajor>(shape, h->strides);
+	if (!vipPlausibleArrayShape(stream, shape, h->dataSize())) {
+		stream.setStatus(QDataStream::ReadCorruptData);
+		return stream;
+	}
+	if (shape.size() && !h->realloc(shape)) {
+		stream.setStatus(QDataStream::ReadCorruptData);
+		return stream;
+	}
+
 	h->istream(VipNDArrayShape(shape.size(), 0), shape, stream);
 	ar = VipNDArray(h);
 	return stream;

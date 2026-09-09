@@ -195,7 +195,6 @@ class ThermavipPyDataFusionProcessing:
                         i+=1
                 else:
                         self.data.append(data)
-                        tmp_res = self.apply(tmp,time)
 		        
         #get the result
         tmp_res = self.apply(self.data,time)

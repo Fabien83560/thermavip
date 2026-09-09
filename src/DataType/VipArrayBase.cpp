@@ -152,16 +152,17 @@ namespace detail
 	}
 }
 
-VipNDArrayHandle* vipNullHandlePtr() noexcept
-{
-	static detail::NullHandle handle;
-	return &handle;
-}
-
 VipSharedHandle vipNullHandle() noexcept
 {
-	static VipSharedHandle h = VipSharedHandle(vipNullHandlePtr());
+	// Allocated: the shared pointer that holds it releases it with delete, and it
+	// used to be given the address of a static, which delete cannot take.
+	static VipSharedHandle h = VipSharedHandle(new detail::NullHandle());
 	return h;
+}
+
+VipNDArrayHandle* vipNullHandlePtr() noexcept
+{
+	return const_cast<VipNDArrayHandle*>(vipNullHandle().constData());
 }
 
 int vipRegisterArrayType(int handle_type, int metaType, const VipSharedHandle& handle)

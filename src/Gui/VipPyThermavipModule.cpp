@@ -723,7 +723,10 @@ static QVariant itemList(int player, int selection, const QString & partial_name
 	}
 }
 
-static QVariant setStyleSheet(int player, const QString & data_name, const QString & stylesheet)
+// The order the Python wrapper sends: it passes positionally, and the two
+// parameters are both strings, so the swap could only show up as "cannot find
+// data name", which is what every call produced.
+static QVariant setStyleSheet(int player, const QString & stylesheet, const QString & data_name)
 {
 	VipDragWidget * w = qobject_cast<VipDragWidget*>(VipUniqueId::find<VipBaseDragWidget>(player));
 	if (!w)

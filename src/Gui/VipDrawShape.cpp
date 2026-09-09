@@ -132,7 +132,12 @@ void VipDrawGraphicsShape::findPlotSceneModel(const QPointF& scene_pos)
 	QList<QRectF> rects;
 
 	QList<VipAbstractScale*> scales = m_player->leftScales();
-	QRectF bottom = m_player->xScale()->mapToScene(m_player->xScale()->boundingRect()).boundingRect();
+	// The player is tested above, its scale was not: it is null while the axes are
+	// being built, and this runs on every press and every move of a drawing.
+	VipAbstractScale* xscale = m_player->xScale();
+	if (!xscale)
+		return;
+	QRectF bottom = xscale->mapToScene(xscale->boundingRect()).boundingRect();
 	for (int i = 0; i < scales.size(); ++i) {
 		VipPlotSceneModel* sm = m_player->findPlotSceneModel(QList<VipAbstractScale*>() << m_player->xScale() << scales[i]);
 		if (sm) {
@@ -362,13 +367,20 @@ QPainterPath VipDrawShapePolygon::shape() const
 
 void VipDrawShapePolygon::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*)
 {
+	// The area is null between the construction of the filter and its installation,
+	// and again after it is removed, which happens one line before the hide: a
+	// repaint fits in between. shape() and sceneEvent() of this class already test it.
+	VipAbstractPlotArea* a = area();
+	if (!a)
+		return;
+
 	painter->setPen(QPen(QColor(255, 0, 0, 100), 0));
 	painter->setBrush(QColor(255, 0, 0, 50));
 	painter->setRenderHints(QPainter::Antialiasing);
 
 	QPolygonF poly(m_polygon);
 	poly.append(m_pos);
-	poly = area()->scaleToPosition(vipToPointVector( poly), sceneModelScales());
+	poly = a->scaleToPosition(vipToPointVector( poly), sceneModelScales());
 
 	poly = this->mapFromItem(area(), poly);
 	// TEST: remove Qt::WindingFill
@@ -479,13 +491,17 @@ VipDrawShapePolyline::VipDrawShapePolyline(VipPlotPlayer* player, const QString&
 }
 void VipDrawShapePolyline::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*)
 {
+	VipAbstractPlotArea* a = area();
+	if (!a)
+		return;
+
 	painter->setPen(QPen(QColor(255, 0, 0, 50), 0));
 	painter->setBrush(Qt::NoBrush);
 	painter->setRenderHints(QPainter::Antialiasing);
 
 	QPolygonF poly(m_polygon);
 	poly.append(m_pos);
-	poly = area()->scaleToPosition(vipToPointVector( poly), sceneModelScales());
+	poly = a->scaleToPosition(vipToPointVector( poly), sceneModelScales());
 	painter->drawPolyline(poly);
 
 	// stop polyline
@@ -577,11 +593,15 @@ QPainterPath VipDrawShapeMask::shape() const
 
 void VipDrawShapeMask::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*)
 {
+	VipAbstractPlotArea* a = area();
+	if (!a)
+		return;
+
 	painter->setPen(QPen(Qt::white, 0));
 	painter->setBrush(QColor(255, 0, 0, 50));
 	painter->setRenderHints(QPainter::Antialiasing);
 
-	QPolygonF poly = area()->scaleToPosition(vipToPointVector(m_polygon), sceneModelScales());
+	QPolygonF poly = a->scaleToPosition(vipToPointVector(m_polygon), sceneModelScales());
 	// TEST: remove Qt::WindingFill
 	painter->drawPolygon(poly /*,Qt::WindingFill*/);
 }

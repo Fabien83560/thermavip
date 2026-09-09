@@ -11,6 +11,7 @@
 #include "VipProcessingObject.h"
 #include "VipImageProcessing.h"
 #include "VipStandardProcessing.h"
+#include "VipStreamingFromDevice.h"
 #include "VipXmlArchive.h"
 
 #include <atomic>
@@ -63,6 +64,23 @@ public:
 
 protected:
 	void apply() override { outputAt(0)->setData(create(QVariant(inputAt(0)->data().value<double>() + 1.0))); }
+};
+
+/// Carries a multi input, so the container operations can be exercised.
+class MultiInputProcessing : public VipProcessingObject
+{
+	Q_OBJECT
+	VIP_IO(VipMultiInput inputs)
+	VIP_IO(VipOutput output)
+
+public:
+	MultiInputProcessing(QObject* parent = nullptr)
+	  : VipProcessingObject(parent)
+	{
+	}
+
+protected:
+	void apply() override {}
 };
 
 // ---------------------------------------------------------------------------
@@ -520,6 +538,37 @@ private Q_SLOTS:
 		VipProcessingManager::setMaxListMemory(50000000);
 	}
 
+	/// The sum itself was an int, so a footprint above two gigabytes came back
+	/// negative. The copies below share one buffer, so this measures the sum
+	/// without allocating three gigabytes.
+	void aFootprintAboveTwoGigabytesStaysPositive()
+	{
+		VipNDArrayType<double> big(vipVector(2048, 8192)); // 128 MB
+		QVariantList many;
+		for (int i = 0; i < 24; ++i)
+			many.append(QVariant::fromValue(VipNDArray(big)));
+
+		const qint64 footprint = vipGetMemoryFootprint(QVariant(many));
+		QVERIFY2(footprint > Q_INT64_C(2) * 1024 * 1024 * 1024, "the sum must not wrap at two gigabytes");
+	}
+
+	/// And the eviction loop accumulated in an int too, so a negative sum never
+	/// reached the cap and the buffer was never trimmed.
+	void theMemoryCapTrimsTheBufferAboveTwoGigabytes()
+	{
+		VipNDArrayType<double> big(vipVector(2048, 8192)); // 128 MB, one shared buffer
+
+		VipFIFOList list;
+		list.setListLimitType(VipDataList::MemorySize);
+		list.setMaxListMemory(Q_INT64_C(2560) * 1024 * 1024);
+
+		int count = 0;
+		for (int i = 0; i < 24; ++i)
+			count = list.push(VipAnyData(QVariant::fromValue(VipNDArray(big)), i));
+
+		QVERIFY2(count < 24, "the buffer must be trimmed once its footprint passes the cap");
+	}
+
 	/// A footprint larger than an int can hold is reported as it is.
 	void largeDataFootprintIsNotTruncated()
 	{
@@ -529,6 +578,52 @@ private Q_SLOTS:
 		const qint64 footprint = any.memoryFootprint();
 		QVERIFY2(footprint > 0, "a large array must not report a negative footprint");
 		QVERIFY(footprint >= Q_INT64_C(256) * 1024 * 1024);
+	}
+
+	// -- Multiple inputs -----------------------------------------------------
+
+	/// Inserting anywhere but at the end configured the element that happened to be
+	/// last instead of the one just inserted, so the new entry was left unset. The
+	/// setter next to it writes the right one.
+	void insertingAnInputConfiguresTheInsertedOne()
+	{
+		MultiInputProcessing proc;
+		VipMultiInput* inputs = proc.topLevelInputAt(0)->toMultiInput();
+		QVERIFY(inputs);
+
+		QVERIFY(inputs->resize(3));
+		QCOMPARE(inputs->count(), 3);
+
+		QVERIFY(inputs->insert(0));
+		QCOMPARE(inputs->count(), 4);
+		for (int i = 0; i < inputs->count(); ++i)
+			QVERIFY2(inputs->at(i)->parentProcessing() == &proc, qPrintable(QStringLiteral("input %1 was left unconfigured").arg(i)));
+	}
+
+	/// An index outside the vector is refused rather than applied.
+	void insertingOutsideTheRangeIsRefused()
+	{
+		MultiInputProcessing proc;
+		VipMultiInput* inputs = proc.topLevelInputAt(0)->toMultiInput();
+		QVERIFY(inputs->resize(2));
+
+		QVERIFY(!inputs->insert(-1));
+		QVERIFY(!inputs->insert(99));
+		QCOMPARE(inputs->count(), 2);
+	}
+
+	/// The container is documented as empty by default, and back() on it is out of
+	/// bounds: both accessors used it without a test.
+	void anEmptyMultiInputHasNoData()
+	{
+		MultiInputProcessing proc;
+		VipMultiInput* inputs = proc.topLevelInputAt(0)->toMultiInput();
+		QVERIFY(inputs->resize(0));
+		QCOMPARE(inputs->count(), 0);
+
+		QVERIFY(!inputs->data().isValid());
+		inputs->setData(makeData(1.0)); // must not crash
+		QVERIFY(true);
 	}
 
 	// -- VipProcessingList ---------------------------------------------------
@@ -578,6 +673,224 @@ private Q_SLOTS:
 			QVERIFY(!observed.isNull());
 		}
 		QVERIFY2(observed.isNull(), "destroying the list must destroy the processings it owns");
+	}
+
+	/// The indexed accessors cast their argument to size_t and indexed a vector
+	/// with it, so a negative index addressed far past the end. They now hold
+	/// the contract of the accessors by name: out of range gives nullptr.
+	void indexedAccessorsRejectAnIndexOutOfRange()
+	{
+		MultiplyByProperty processing;
+
+		QVERIFY(processing.inputAt(0));
+		QVERIFY2(!processing.inputAt(-1), "a negative index must not be cast into a huge one");
+		QVERIFY(!processing.inputAt(processing.inputCount()));
+		QVERIFY(!processing.outputAt(-1));
+		QVERIFY(!processing.outputAt(processing.outputCount()));
+		QVERIFY(!processing.propertyAt(-1));
+		QVERIFY(!processing.propertyAt(processing.propertyCount()));
+		QVERIFY(!processing.topLevelInputAt(-1));
+		QVERIFY(!processing.topLevelInputAt(processing.topLevelInputCount()));
+		QVERIFY(!processing.topLevelOutputAt(processing.topLevelOutputCount()));
+		QVERIFY(!processing.topLevelPropertyAt(processing.topLevelPropertyCount()));
+	}
+
+	/// Same for the list, whose position argument is public input: inserting
+	/// past the end of a QList is undefined, and at()/take() indexed on trust.
+	void processingListBoundsItsPositions()
+	{
+		VipProcessingList list;
+		AddOne* first = new AddOne();
+		QVERIFY(list.append(first));
+
+		AddOne* late = new AddOne();
+		QVERIFY2(list.insert(50, late), "a position past the end is clamped, not rejected");
+		QCOMPARE(list.size(), 2);
+		QCOMPARE(list.at(1), late);
+
+		QVERIFY(!list.at(-1));
+		QVERIFY(!list.at(list.size()));
+		QVERIFY(!list.take(-1));
+		QVERIFY(!list.take(list.size()));
+		QCOMPARE(list.size(), 2);
+	}
+
+	/// Assigning an output left its data behind, so the replaced output kept
+	/// serving the value of the one it was supposed to become. The sibling
+	/// property class always assigned it.
+	void assigningAnOutputCarriesItsData()
+	{
+		VipOutput first("first");
+		first.setData(VipAnyData(QVariant(1.0), 10));
+		VipOutput second("second");
+		second.setData(VipAnyData(QVariant(2.0), 20));
+
+		first = second;
+
+		QCOMPARE(first.data().value<double>(), 2.0);
+		QCOMPARE(first.data().time(), (qint64)20);
+	}
+
+	/// The set of error codes actually logged was copied from an empty member in
+	/// the initialiser list, before the constructor body filled it, so nothing
+	/// was ever logged.
+	void theDefaultLoggedErrorCodesAreNotEmpty()
+	{
+		QVERIFY(VipProcessingManager::isLogErrorEnabled(VipProcessingObject::RuntimeError));
+		QVERIFY(VipProcessingManager::isLogErrorEnabled(VipProcessingObject::WrongInput));
+		QVERIFY(VipProcessingManager::isLogErrorEnabled(VipProcessingObject::IOError));
+	}
+
+	/// A connection carries a parent processing object only once it has been
+	/// attached to one. Opening a standalone connection walked straight through
+	/// that null parent, and so did the branch meant to report the bad address.
+	void anUnattachedConnectionReportsInsteadOfFaulting()
+	{
+		VipConnectionPtr connection(new VipConnection());
+		connection->setupConnection("VipConnection:no_such_processing;output");
+
+		QVERIFY2(!connection->openConnection(VipConnection::InputConnection), "an address that resolves to nothing must fail to open");
+		QVERIFY(connection->hasError());
+
+		connection->receiveData(VipAnyData(QVariant(1.0), 0));
+	}
+
+	/// Opening the connections of a processing dropped the result for every one
+	/// of them, so a session whose address does not resolve reloaded silently
+	/// incomplete.
+	void openingConnectionsReportsAnAddressThatDoesNotResolve()
+	{
+		MultiplyByProperty processing;
+		processing.setObjectName("consumer");
+		processing.inputAt(0)->setConnection("VipConnection:no_such_processing;output");
+
+		QVERIFY(!processing.openInputConnections());
+	}
+
+	/// The priority map used to be streamed through a reinterpret_cast onto a map
+	/// of int, which is undefined and let any value from the stream reach
+	/// QThread::setPriority. The wire format is unchanged.
+	void aThreadPriorityOutsideTheEnumerationIsRefused()
+	{
+		QByteArray buffer;
+		{
+			QDataStream str(&buffer, QIODevice::WriteOnly);
+			str << (quint32)2 << QString("known") << (qint32)QThread::HighPriority << QString("forged") << (qint32)987654;
+		}
+
+		PriorityMap map;
+		{
+			QDataStream str(&buffer, QIODevice::ReadOnly);
+			str >> map;
+		}
+
+		QCOMPARE(map.size(), 2);
+		QCOMPARE(map.value("known"), QThread::HighPriority);
+		QCOMPARE(map.value("forged"), QThread::InheritPriority);
+	}
+
+	/// And a map written by the current code reads back identically.
+	void thePriorityMapSurvivesARoundTrip()
+	{
+		PriorityMap written;
+		written.insert("first", QThread::LowestPriority);
+		written.insert("second", QThread::TimeCriticalPriority);
+
+		QByteArray buffer;
+		{
+			QDataStream str(&buffer, QIODevice::WriteOnly);
+			str << written;
+		}
+		PriorityMap read;
+		{
+			QDataStream str(&buffer, QIODevice::ReadOnly);
+			str >> read;
+		}
+		QCOMPARE(read, written);
+	}
+
+	/// The descent along the sources had no visited set, so two processings that
+	/// are sources of each other recursed until the stack ran out.
+	void aCycleInTheSourcesDoesNotRecurseForever()
+	{
+		MultiplyByProperty first;
+		MultiplyByProperty second;
+		QVERIFY(first.outputAt(0)->setConnection(second.inputAt(0)));
+		QVERIFY(second.outputAt(0)->setConnection(first.inputAt(0)));
+		QVERIFY(first.directSources().contains(&second));
+		QVERIFY(second.directSources().contains(&first));
+
+		first.setSourceProperty("campaign", QVariant(7));
+
+		QCOMPARE(first.property("campaign").toInt(), 7);
+		QCOMPARE(second.property("campaign").toInt(), 7);
+	}
+
+	/// The reader dropped the connections and wrote the object as it went, so an
+	/// archive that stops after the first field left a disconnected object
+	/// carrying default values. It now applies nothing at all.
+	void aTruncatedProcessingArchiveLeavesTheObjectAlone()
+	{
+		const QString xml = QStringLiteral("<processing type_name=\"VipClamp*\">"
+						   "<processing_name type_name=\"QString\">from_file</processing_name>"
+						   "</processing>");
+
+		VipClamp target;
+		target.setObjectName("original");
+		target.setProcessingVisible(true);
+
+		VipXIStringArchive in(xml);
+		QVERIFY(in.isOpen());
+		in.content("processing", &target);
+
+		QCOMPARE(target.objectName(), QString("original"));
+		QVERIFY2(target.isProcessingVisible(), "a field that was never read must not be applied");
+	}
+
+	/// The task pool outlives the derived parts of the object: it is destroyed by
+	/// the base destructor, after every derived destructor has run. Nothing may
+	/// be submitted or run from the moment destruction starts.
+	void anObjectBeingDestroyedTakesNoMoreWork()
+	{
+		MultiplyByProperty* processing = new MultiplyByProperty();
+		processing->inputAt(0)->setData(VipAnyData(QVariant(3.0), 0));
+		QVERIFY(processing->update(true));
+		const int applied = processing->applyCount.load();
+
+		bool seen = false;
+		bool accepted = true;
+		bool flagged = false;
+		QObject::connect(processing, &VipProcessingObject::destroyed, processing, [&](VipProcessingObject* obj) {
+			seen = true;
+			flagged = obj->isBeingDestroyed();
+			obj->inputAt(0)->setData(VipAnyData(QVariant(5.0), 1));
+			accepted = obj->update(true);
+		});
+
+		delete processing;
+
+		QVERIFY2(seen, "the destruction signal must reach the slot");
+		QVERIFY2(flagged, "the object must know it is being destroyed");
+		QVERIFY2(!accepted, "no work may be submitted once destruction has started");
+		Q_UNUSED(applied);
+	}
+
+	/// The setter says it takes ownership of the device. Refusing it once the
+	/// object is open used to leave it neither stored nor destroyed, and the
+	/// caller had already let go of it.
+	void aRefusedDeviceIsStillDestroyed()
+	{
+		VipStreamingFromDevice streaming;
+		VipAnyResource* inner = new VipAnyResource();
+		inner->setData(QVariant(1.0));
+		streaming.setIODevice(inner);
+		QVERIFY(streaming.open(VipIODevice::ReadOnly));
+
+		QPointer<VipIODevice> observed = new VipAnyResource();
+		streaming.setIODevice(observed);
+
+		QVERIFY2(observed.isNull(), "a device that is taken but not kept must be destroyed");
+		QCOMPARE(streaming.IODevice(), (VipIODevice*)inner);
 	}
 };
 

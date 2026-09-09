@@ -184,8 +184,13 @@ struct VipHybridVector
 	template<class Other, std::enable_if_t<VipIsIterable_v<Other>, int> = 0>
 	VIP_ALWAYS_INLINE VipHybridVector(const Other& v) noexcept
 	{
-		if(v.size() == N)
-			vipForEachDims([&](auto i) { elems[i] = static_cast<T>(v[i]); }, std::make_integer_sequence<qsizetype, (qsizetype)N>{});
+		// A size that does not match used to leave the whole object as it came off
+		// the stack, and this constructor is implicit: the shape then indexed an
+		// array with arbitrary values. Zero first, then copy what is there.
+		vipForEachDims([&](auto i) { elems[i] = T(); }, std::make_integer_sequence<qsizetype, (qsizetype)N>{});
+		const qsizetype count = qMin((qsizetype)v.size(), (qsizetype)N);
+		for (qsizetype i = 0; i < count; ++i)
+			elems[i] = static_cast<T>(v[i]);
 	}
 
 	// iterator support
@@ -321,15 +326,18 @@ public:
 	  : m_size(0)
 	{
 	}
+	// The storage is a member array of VIP_MAX_DIMS elements. The bounds below were
+	// debug assertions only, which is nothing in a release build, and the size can
+	// come from a file: clamp instead of writing past the array.
 	VIP_ALWAYS_INLINE explicit VipHybridVector(qsizetype size) noexcept
-	  : m_size(size)
+	  : m_size(qBound((qsizetype)0, size, (qsizetype)VIP_MAX_DIMS))
 	{
-		VIP_ASSERT_DEBUG(m_size <= VIP_MAX_DIMS);
+		VIP_ASSERT_DEBUG(size <= VIP_MAX_DIMS && size >= 0);
 	}
 	VIP_ALWAYS_INLINE explicit VipHybridVector(qsizetype size, const T& elem) noexcept
-	  : m_size(size)
+	  : m_size(qBound((qsizetype)0, size, (qsizetype)VIP_MAX_DIMS))
 	{
-		VIP_ASSERT_DEBUG(m_size <= VIP_MAX_DIMS);
+		VIP_ASSERT_DEBUG(size <= VIP_MAX_DIMS && size >= 0);
 		fill(elem);
 	}
 
@@ -337,10 +345,10 @@ public:
 	// to avoid confusion with the constructor above.
 	// We loose consexpr size on some compilers....
 	VIP_ALWAYS_INLINE VipHybridVector(std::initializer_list<T> lst) noexcept
-	  : m_size(lst.size())
+	  : m_size(qMin((qsizetype)lst.size(), (qsizetype)VIP_MAX_DIMS))
 	{
-		VIP_ASSERT_DEBUG(m_size <= VIP_MAX_DIMS);
-		std::copy(lst.begin(), lst.end(), m_elems);
+		VIP_ASSERT_DEBUG((qsizetype)lst.size() <= VIP_MAX_DIMS);
+		std::copy_n(lst.begin(), m_size, m_elems);
 	}
 
 	template<class Iter, std::enable_if_t<VipIsIterator_v<Iter>, int> = 0>
@@ -353,8 +361,7 @@ public:
 	template<class Other, std::enable_if_t<VipIsIterable_v<Other>, int> = 0>
 	VIP_ALWAYS_INLINE VipHybridVector(const Other& v) noexcept
 	{
-		VIP_ASSERT_DEBUG(v.size() <= VIP_MAX_DIMS);
-		resize(v.size());
+		resize((qsizetype)v.size());
 		for (qsizetype i = 0; i < m_size; ++i)
 			m_elems[i] = static_cast<T>(v[i]);
 	}
@@ -364,7 +371,8 @@ public:
 	VIP_ALWAYS_INLINE void push_back(const T& elem) noexcept
 	{
 		VIP_ASSERT_DEBUG(m_size < VIP_MAX_DIMS);
-		m_elems[m_size++] = elem;
+		if (m_size < VIP_MAX_DIMS)
+			m_elems[m_size++] = elem;
 	}
 
 	VIP_ALWAYS_INLINE void clear() noexcept { m_size = 0; }
@@ -446,8 +454,7 @@ public:
 	template<class Other>
 	VIP_ALWAYS_INLINE VipHybridVector& operator=(const Other& rhs) noexcept
 	{
-		VIP_ASSERT_DEBUG(rhs.size() <= VIP_MAX_DIMS);
-		m_size = rhs.size();
+		m_size = qBound((qsizetype)0, (qsizetype)rhs.size(), (qsizetype)VIP_MAX_DIMS);
 		for (qsizetype i = 0; i < m_size; ++i)
 			m_elems[i] = static_cast<T>(rhs[i]);
 		return *this;
@@ -486,10 +493,11 @@ public:
 	VIP_ALWAYS_INLINE void assign(const T& value) noexcept { fill(value); } // A synonym for fill
 	VIP_ALWAYS_INLINE void fill(const T& value) noexcept { std::fill_n(m_elems, VIP_MAX_DIMS, value); }
 
+	// The three entry points a size read from a file can reach clamp rather than
+	// assert: an assertion is nothing in a release build.
 	VIP_ALWAYS_INLINE void resize(size_type new_size) noexcept
 	{
-		VIP_ASSERT_DEBUG(new_size <= VIP_MAX_DIMS && new_size >= 0);
-		m_size = new_size;
+		m_size = qBound((size_type)0, new_size, (size_type)VIP_MAX_DIMS);
 	}
 	VIP_ALWAYS_INLINE void resize(size_type new_size, const T & val) noexcept
 	{

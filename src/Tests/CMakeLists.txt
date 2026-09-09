@@ -8,7 +8,9 @@
 # Mark it QEXPECT_FAIL with the reason; QTest then reports XPASS and fails the
 # test once the defect is fixed, forcing the marker to be removed.
 
+add_subdirectory(Logging)
 add_subdirectory(DataType)
 add_subdirectory(Core)
 add_subdirectory(Gui)
 add_subdirectory(Annotation)
+add_subdirectory(Python)

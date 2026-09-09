@@ -51,14 +51,51 @@
 #include "VipUniqueId.h"
 #include "VipXmlArchive.h"
 
-inline QDataStream& operator<<(QDataStream& str, const PriorityMap& map)
+namespace
 {
-	const QMap<QString, int>& m = reinterpret_cast<const QMap<QString, int>&>(map);
-	return str << m;
+	// The value read is passed to QThread::setPriority, so anything outside the
+	// enumeration is refused rather than converted.
+	QThread::Priority toThreadPriority(qint32 value)
+	{
+		switch (value) {
+			case QThread::IdlePriority:
+			case QThread::LowestPriority:
+			case QThread::LowPriority:
+			case QThread::NormalPriority:
+			case QThread::HighPriority:
+			case QThread::HighestPriority:
+			case QThread::TimeCriticalPriority:
+			case QThread::InheritPriority:
+				return static_cast<QThread::Priority>(value);
+			default:
+				return QThread::InheritPriority;
+		}
+	}
 }
-inline QDataStream& operator>>(QDataStream& str, PriorityMap& map)
+
+// The two maps used to be aliased through a reinterpret_cast, which is undefined
+// between distinct class types and wrote arbitrary stream values into an enum.
+QDataStream& operator<<(QDataStream& str, const PriorityMap& map)
 {
-	return str >> reinterpret_cast<QMap<QString, int>&>(map);
+	str << static_cast<quint32>(map.size());
+	for (PriorityMap::const_iterator it = map.begin(); it != map.end(); ++it)
+		str << it.key() << static_cast<qint32>(it.value());
+	return str;
+}
+QDataStream& operator>>(QDataStream& str, PriorityMap& map)
+{
+	map.clear();
+	quint32 count = 0;
+	str >> count;
+	for (quint32 i = 0; i < count; ++i) {
+		QString name;
+		qint32 priority = QThread::InheritPriority;
+		str >> name >> priority;
+		if (str.status() != QDataStream::Ok)
+			break;
+		map.insert(name, toThreadPriority(priority));
+	}
+	return str;
 }
 
 QStringList VipAnyData::mergeAttributes(const QVariantMap& attrs)
@@ -170,7 +207,13 @@ VipConnection::VipConnection()
 
 VipConnection::~VipConnection()
 {
-	clearConnection();
+	// Qualified, and without setOpenMode(): a virtual call here would resolve to
+	// this class, and the signal would reach a half destroyed object. Each
+	// derived class closes what it owns in its own destructor.
+	VipConnection::doClearConnection();
+	d_data->address.clear();
+	d_data->connections.clear();
+	d_data->openMode = UnknownConnection;
 }
 
 VipProcessingIO* VipConnection::parentProcessingIO() const
@@ -284,6 +327,31 @@ void VipConnection::setOpenMode(IOType mode)
 		Q_EMIT connectionClosed(parentProcessingIO());
 }
 
+// The address of the output end of a connection, empty when that end is not
+// attached to a processing object.
+static QString outputConnectionAddress(const VipConnectionPtr& out)
+{
+	if (!out)
+		return QString();
+	VipProcessingObject* processing = out->parentProcessingObject();
+	VipProcessingIO* io = out->parentProcessingIO();
+	if (!processing || !io)
+		return QString();
+	if (VipProcessingPool* pool = processing->parentObjectPool())
+		return "VipConnection:" + pool->objectName() + ";" + processing->objectName() + ";" + io->name();
+	return "VipConnection:" + processing->objectName() + ";" + io->name();
+}
+
+// Name of the processing a connection belongs to, for logging.
+static QString connectionProcessingName(const VipConnection* connection)
+{
+	if (connection)
+		if (VipProcessingIO* io = connection->parentProcessingIO())
+			if (VipProcessingObject* processing = io->parentProcessing())
+				return processing->objectName();
+	return QStringLiteral("<unattached connection>");
+}
+
 QString VipConnection::address() const
 {
 	// recompute the address if needed ( the VipProcessingObject name might have changed in the meantime)
@@ -291,12 +359,9 @@ QString VipConnection::address() const
 		// build connection from given VipConnection instances
 		if (d_data->connections.size()) {
 			// use the last (probably unique) connection which is the output
-			VipConnectionPtr out = d_data->connections.back();
-			if (VipProcessingPool* pool = out->parentProcessingObject()->parentObjectPool())
-				const_cast<QString&>(d_data->address) =
-				  "VipConnection:" + pool->objectName() + ";" + out->parentProcessingObject()->objectName() + ";" + out->parentProcessingIO()->name();
-			else
-				const_cast<QString&>(d_data->address) = "VipConnection:" + out->parentProcessingObject()->objectName() + ";" + out->parentProcessingIO()->name();
+			const QString addr = outputConnectionAddress(d_data->connections.back());
+			if (!addr.isEmpty())
+				const_cast<QString&>(d_data->address) = addr;
 		}
 	}
 	return d_data->address;
@@ -327,8 +392,11 @@ QList<UniqueProcessingIO*> VipConnection::allSinks() const
 
 void VipConnection::receiveData(const VipAnyData& data)
 {
-	parentProcessingIO()->setData(data);
-	Q_EMIT dataReceived(parentProcessingIO(), data);
+	VipProcessingIO* io = parentProcessingIO();
+	if (!io)
+		return;
+	io->setData(data);
+	Q_EMIT dataReceived(io, data);
 }
 
 void VipConnection::removeProcessingPoolFromAddress()
@@ -356,10 +424,9 @@ void VipConnection::doOpenConnection(IOType type)
 				out->d_data->connections.append(in);
 
 			// save processing pool name if possible
-			if (VipProcessingPool* pool = out->parentProcessingObject()->parentObjectPool())
-				d_data->address = "VipConnection:" + pool->objectName() + ";" + out->parentProcessingObject()->objectName() + ";" + out->parentProcessingIO()->name();
-			else
-				d_data->address = "VipConnection:" + out->parentProcessingObject()->objectName() + ";" + out->parentProcessingIO()->name();
+			const QString addr = outputConnectionAddress(out);
+			if (!addr.isEmpty())
+				d_data->address = addr;
 			d_data->connections = VipConnectionVector() << out;
 			this->setOpenMode(InputConnection);
 		}
@@ -367,7 +434,8 @@ void VipConnection::doOpenConnection(IOType type)
 		else if (d_data->address.length()) {
 			QString addr = removeClassNamePrefix(d_data->address);
 			QStringList lst = addr.split(";");
-			QObject* pool = parentProcessingObject()->parentObjectPool();
+			VipProcessingObject* owner = parentProcessingObject();
+			QObject* pool = owner ? owner->parentObjectPool() : nullptr;
 			if (lst.size() == 3) {
 				// When loading a player session, processing objects are first inserted in a temporary pool set as parent,
 				// so use this pool and not the one given in the connection name
@@ -376,9 +444,9 @@ void VipConnection::doOpenConnection(IOType type)
 				lst = lst.mid(1);
 			}
 
-			if (!pool) {
+			if (!pool && owner) {
 				// Use the parent object (like a VipProcessingBlock)
-				pool = parentProcessingObject()->parent();
+				pool = owner->parent();
 			}
 
 			if (pool && lst.size() == 2) {
@@ -392,11 +460,9 @@ void VipConnection::doOpenConnection(IOType type)
 						if (out->d_data->connections.indexOf(in) < 0)
 							out->d_data->connections.append(in);
 
-						if (VipProcessingPool* p = out->parentProcessingObject()->parentObjectPool())
-							d_data->address =
-							  "VipConnection:" + p->objectName() + ";" + out->parentProcessingObject()->objectName() + ";" + out->parentProcessingIO()->name();
-						else
-							d_data->address = "VipConnection:" + out->parentProcessingObject()->objectName() + ";" + out->parentProcessingIO()->name();
+						const QString out_addr = outputConnectionAddress(out);
+						if (!out_addr.isEmpty())
+							d_data->address = out_addr;
 						d_data->connections = VipConnectionVector() << out;
 						this->setOpenMode(InputConnection);
 						return;
@@ -407,8 +473,9 @@ void VipConnection::doOpenConnection(IOType type)
 				}
 			}
 
-			VIP_LOG_ERROR("Wrong connection format for " + this->parentProcessingIO()->parentProcessing()->objectName() + ", address: " + d_data->address);
-			setError("Wrong connection format for " + this->parentProcessingIO()->parentProcessing()->objectName(), VipProcessingObject::ConnectionNotOpen);
+			const QString processing_name = connectionProcessingName(this);
+			VIP_LOG_ERROR("Wrong connection format for " + processing_name + ", address: " + d_data->address);
+			setError("Wrong connection format for " + processing_name, VipProcessingObject::ConnectionNotOpen);
 			this->setOpenMode(UnknownConnection);
 		}
 	}
@@ -428,16 +495,20 @@ void VipConnection::doClearConnection()
 {
 	//VipConnectionPtr con = sharedFromThis();
 	for (int i = 0; i < d_data->connections.size(); ++i) {
-		qsizetype index = indexOfSharedVector(d_data->connections[i]->d_data->connections, this);
+		// Hold the peer: the callback below can drop the last reference to it.
+		VipConnectionPtr peer = d_data->connections[i];
+		qsizetype index = indexOfSharedVector(peer->d_data->connections, this);
 		if (index >= 0) {
 
-			auto* p = d_data->connections[i]->d_data->parent;
+			auto* p = peer->d_data->parent;
 
-			d_data->connections[i]->d_data->connections.remove(index);
-			if (d_data->connections[i]->d_data->connections.isEmpty())
-				p->receiveConnectionClosed(d_data->connections[i]->d_data->io);
+			peer->d_data->connections.remove(index);
+			// The parent is only set by setParentProcessingObject: a connection
+			// that was never attached has none.
+			if (p && peer->d_data->connections.isEmpty())
+				p->receiveConnectionClosed(peer->d_data->io);
 
-			d_data->connections[i]->checkClosedConnections();
+			peer->checkClosedConnections();
 		}
 	}
 
@@ -944,7 +1015,12 @@ VipOutput::VipOutput(const VipOutput& other)
 
 VipOutput& VipOutput::operator=(const VipOutput& other)
 {
-	static_cast<UniqueProcessingIO&>(*this) = other;
+	if (this == &other)
+		return *this;
+	static_cast<UniqueProcessingIO&>(*this) = static_cast<const UniqueProcessingIO&>(other);
+	// The current data was the one member left behind, so an assigned output kept
+	// serving its own; the sibling class assigns it.
+	d_data = other.d_data;
 	m_bufferize_outputs = other.m_bufferize_outputs;
 	m_buffer = other.m_buffer;
 	return *this;
@@ -1074,13 +1150,20 @@ public:
 	  , list_limit_type(_list_limit_type)
 	  , max_list_size(_max_list_size)
 	  , max_list_memory(_max_list_memory)
+	  , _log_errors(defaultLogErrors())
 	  , errors(_log_errors)
 	  , _obj_types(0)
 	  , _obj_infos(0)
 	  , _dirty_objects(1)
 	{
-		_log_errors << VipProcessingObject::RuntimeError << VipProcessingObject::WrongInput << VipProcessingObject::WrongInputNumber << VipProcessingObject::ConnectionNotOpen
-			    << VipProcessingObject::DeviceNotOpen << VipProcessingObject::IOError;
+	}
+
+	// errors is a copy, taken in the initialiser list: filling _log_errors in the
+	// body left the active set empty, so no error code was ever logged.
+	static QSet<int> defaultLogErrors()
+	{
+		return QSet<int>{ VipProcessingObject::RuntimeError,	   VipProcessingObject::WrongInput,	VipProcessingObject::WrongInputNumber,
+				  VipProcessingObject::ConnectionNotOpen, VipProcessingObject::DeviceNotOpen, VipProcessingObject::IOError };
 	}
 
 	// global default values
@@ -1164,6 +1247,8 @@ void VipProcessingManager::applyAll()
 	for (int i = 0; i < procs.size(); ++i) {
 		// only apply the parameters if they are the default ones
 		VipProcessingObject* proc = procs[i];
+		if (proc->isBeingDestroyed())
+			continue;
 		if (proc->logErrors() == VipProcessingManager::instance().d_data->_log_errors) {
 			proc->setLogErrors(instance().d_data->errors);
 		}
@@ -1347,9 +1432,12 @@ int VipFIFOList::push(const VipAnyData& data, int* previous)
 				m_list.pop_front();
 		}
 		if (limits & MemorySize) {
-			int i = 0;
-			int size = 0;
-			for (i = (int)m_list.size() - 1; i >= 0; --i) {
+			// The sum overflows before the cap is reached as soon as the buffer
+			// holds more than two gigabytes, and a negative sum never satisfies
+			// the test: nothing was evicted at all.
+			qsizetype i = 0;
+			qint64 size = 0;
+			for (i = (qsizetype)m_list.size() - 1; i >= 0; --i) {
 				size += m_list[i].memoryFootprint();
 				if (size >= maxListMemory())
 					break;
@@ -1376,9 +1464,12 @@ int VipFIFOList::push(VipAnyData&& data, int* previous)
 		}
 		if (limits & MemorySize) {
 
-			int i = 0;
-			int size = 0;
-			for (i = (int)m_list.size() - 1; i >= 0; --i) {
+			// The sum overflows before the cap is reached as soon as the buffer
+			// holds more than two gigabytes, and a negative sum never satisfies
+			// the test: nothing was evicted at all.
+			qsizetype i = 0;
+			qint64 size = 0;
+			for (i = (qsizetype)m_list.size() - 1; i >= 0; --i) {
 				size += m_list[i].memoryFootprint();
 				if (size >= maxListMemory())
 					break;
@@ -1486,7 +1577,7 @@ int VipFIFOList::status() const
 qint64 VipFIFOList::memoryFootprint() const
 {
 	_SHAREDSPINLOCKER();
-	int size = 0;
+	qint64 size = 0;
 	for (size_t i = 0; i < (size_t)m_list.size(); ++i)
 		size += m_list[i].memoryFootprint();
 	return size;
@@ -1517,14 +1608,14 @@ int VipLIFOList::push(const VipAnyData& data, int* previous)
 			m_list.pop_back();
 	}
 	if (listLimitType() & MemorySize) {
-		int i = 0;
-		int size = 0;
-		for (i = 0; i < (int)m_list.size(); ++i) {
+		qsizetype i = 0;
+		qint64 size = 0;
+		for (i = 0; i < (qsizetype)m_list.size(); ++i) {
 			size += m_list[i].memoryFootprint();
 			if (size >= maxListMemory())
 				break;
 		}
-		if (i < static_cast<int>(m_list.size()))
+		if (i < static_cast<qsizetype>(m_list.size()))
 			m_list.erase(m_list.begin() + i + 1, m_list.end());
 		// m_list = m_list.mid(0, i + 1);
 	}
@@ -1545,14 +1636,14 @@ int VipLIFOList::push(VipAnyData&& data, int* previous)
 			m_list.pop_back();
 	}
 	if (listLimitType() & MemorySize) {
-		int i = 0;
-		int size = 0;
-		for (i = 0; i < (int)m_list.size(); ++i) {
+		qsizetype i = 0;
+		qint64 size = 0;
+		for (i = 0; i < (qsizetype)m_list.size(); ++i) {
 			size += m_list[i].memoryFootprint();
 			if (size >= maxListMemory())
 				break;
 		}
-		if (i < static_cast<int>(m_list.size()))
+		if (i < static_cast<qsizetype>(m_list.size()))
 			m_list.erase(m_list.begin() + i + 1, m_list.end());
 		// m_list = m_list.mid(0, i + 1);
 	}
@@ -1649,7 +1740,7 @@ qint64 VipLIFOList::time() const
 qint64 VipLIFOList::memoryFootprint() const
 {
 	_SHAREDSPINLOCKER();
-	int size = 0;
+	qint64 size = 0;
 	for (int i = 0; i < static_cast<int>(m_list.size()); ++i)
 		size += m_list[i].memoryFootprint();
 	return size;
@@ -2229,8 +2320,8 @@ VipProcessingObject::~VipProcessingObject()
 
 	// wait for all remaining processing and delete the task pool
 	if (TaskPool* p = d_data->getPool()) {
-		p->waitForDone();
 		p->clear();
+		p->waitForDone();
 		/* if (p->thread() == this->thread())
 			delete p;
 		else
@@ -2279,8 +2370,41 @@ void VipProcessingObject::dirtyProcessingIO(VipProcessingIO* io)
 		this->setSourceProperty(names[i].data(), this->property(names[i].data()));
 }
 
+namespace
+{
+	// Set of nodes already reached by the current descent, held for the outermost
+	// call only. Without it, two processings that are sources of each other
+	// recursed until the stack ran out.
+	struct VisitedSources
+	{
+		static QSet<const VipProcessingObject*>*& current()
+		{
+			static thread_local QSet<const VipProcessingObject*>* set = nullptr;
+			return set;
+		}
+		QSet<const VipProcessingObject*> own;
+		const bool outermost;
+		VisitedSources()
+		  : outermost(current() == nullptr)
+		{
+			if (outermost)
+				current() = &own;
+		}
+		~VisitedSources()
+		{
+			if (outermost)
+				current() = nullptr;
+		}
+	};
+}
+
 void VipProcessingObject::setSourceProperty(const char* name, const QVariant& value)
 {
+	VisitedSources visited;
+	if (VisitedSources::current()->contains(this))
+		return;
+	VisitedSources::current()->insert(this);
+
 	this->setProperty(name, value);
 	this->setProperty((QByteArray("__source_") + name).data(), value);
 	QList<VipProcessingObject*> sources = this->directSources();
@@ -2606,19 +2730,28 @@ int VipProcessingObject::topLevelPropertyCount() const
 VipProcessingIO* VipProcessingObject::topLevelInputAt(int i) const
 {
 	initialize();
-	return d_data->inputs[i].get();
+	// Out of range gives nullptr, the contract the accessors by name already hold.
+	// The index came straight from the caller and a negative one, once cast to
+	// size_t, addresses far past the end.
+	if (i < 0 || static_cast<size_t>(i) >= d_data->inputs.size())
+		return nullptr;
+	return d_data->inputs[static_cast<size_t>(i)].get();
 }
 
 VipProcessingIO* VipProcessingObject::topLevelOutputAt(int i) const
 {
 	initialize();
-	return d_data->outputs[i].get();
+	if (i < 0 || static_cast<size_t>(i) >= d_data->outputs.size())
+		return nullptr;
+	return d_data->outputs[static_cast<size_t>(i)].get();
 }
 
 VipProcessingIO* VipProcessingObject::topLevelPropertyAt(int i) const
 {
 	initialize();
-	return d_data->properties[i].get();
+	if (i < 0 || static_cast<size_t>(i) >= d_data->properties.size())
+		return nullptr;
+	return d_data->properties[static_cast<size_t>(i)].get();
 }
 
 VipProcessingIO* VipProcessingObject::topLevelInputName(const QString& name) const
@@ -2669,18 +2802,24 @@ VipProperty* VipProcessingObject::propertyName(const QString& property) const
 VipInput* VipProcessingObject::inputAt(int index) const
 {
 	initialize();
+	if (index < 0 || static_cast<size_t>(index) >= d_data->flatInputs.size())
+		return nullptr;
 	return d_data->flatInputs[static_cast<size_t>(index)];
 }
 
 VipOutput* VipProcessingObject::outputAt(int index) const
 {
 	initialize();
+	if (index < 0 || static_cast<size_t>(index) >= d_data->flatOutputs.size())
+		return nullptr;
 	return d_data->flatOutputs[static_cast<size_t>(index)];
 }
 
 VipProperty* VipProcessingObject::propertyAt(int index) const
 {
 	initialize();
+	if (index < 0 || static_cast<size_t>(index) >= d_data->flatProperties.size())
+		return nullptr;
 	return d_data->flatProperties[static_cast<size_t>(index)];
 }
 
@@ -3057,28 +3196,48 @@ void VipProcessingObject::setupOutputConnections(const QString& address)
 	emitProcessingChanged();
 }
 
-void VipProcessingObject::openInputConnections()
+// Opens one end, reporting what happened instead of dropping it.
+static bool openIOConnection(UniqueProcessingIO* io, VipConnection::IOType type, const QString& processing)
 {
+	if (!io)
+		return false;
+	VipConnectionPtr connection = io->connection();
+	if (!connection) {
+		VIP_LOG_ERROR("No connection for " + processing + "/" + io->name());
+		return false;
+	}
+	if (connection->openConnection(type))
+		return true;
+	VIP_LOG_ERROR("Cannot open connection for " + processing + "/" + io->name() + ", address: " + connection->address());
+	return false;
+}
+
+bool VipProcessingObject::openInputConnections()
+{
+	bool ok = true;
 	for (int i = 0; i < inputCount(); ++i)
-		inputAt(i)->connection()->openConnection(VipConnection::InputConnection);
+		ok = openIOConnection(inputAt(i), VipConnection::InputConnection, objectName()) && ok;
 	for (int i = 0; i < propertyCount(); ++i)
-		propertyAt(i)->connection()->openConnection(VipConnection::InputConnection);
+		ok = openIOConnection(propertyAt(i), VipConnection::InputConnection, objectName()) && ok;
 	emitProcessingChanged();
+	return ok;
 }
 
-void VipProcessingObject::openOutputConnections()
+bool VipProcessingObject::openOutputConnections()
 {
+	bool ok = true;
 	for (int i = 0; i < outputCount(); ++i)
-		outputAt(i)->connection()->openConnection(VipConnection::OutputConnection);
+		ok = openIOConnection(outputAt(i), VipConnection::OutputConnection, objectName()) && ok;
 	emitProcessingChanged();
+	return ok;
 }
 
-void VipProcessingObject::openAllConnections()
+bool VipProcessingObject::openAllConnections()
 {
 	// open the outputs first
-	openOutputConnections();
+	bool ok = openOutputConnections();
 	// then open the inputs/properties
-	openInputConnections();
+	return openInputConnections() && ok;
 }
 
 void VipProcessingObject::removeProcessingPoolFromAddresses()
@@ -3207,6 +3366,10 @@ bool VipProcessingObject::isEnabled() const
 
 bool VipProcessingObject::update(bool force_run)
 {
+	// The task pool outlives the derived parts of the object: nothing may be
+	// submitted once the destructor has started.
+	if (VIP_UNLIKELY(d_data->destruct))
+		return false;
 
 	// Exit if disabled
 	if (VIP_UNLIKELY(!isEnabled()))
@@ -3462,12 +3625,19 @@ void VipProcessingObject::run()
 	SPIN_LOCK(d_data->run_mutex);
 	runNoLock();
 }
+bool VipProcessingObject::isBeingDestroyed() const noexcept
+{
+	return d_data->destruct;
+}
 VipSpinlock& VipProcessingObject::runLock() noexcept
 {
 	return d_data->run_mutex;
 }
 void VipProcessingObject::runNoLock()
 {
+	if (VIP_UNLIKELY(d_data->destruct))
+		return;
+
 	if (testScheduleStrategy(SkipIfNoInput)) {
 		// if the processing has no new input, skip it
 		bool has_input = false;
@@ -3667,6 +3837,10 @@ QList<const VipProcessingObject*> VipProcessingObject::allObjects()
 	VipProcessingManager::instance().d_data->_obj_infos = additionals.size();
 	VipProcessingManager::instance().d_data->_dirty_objects = 0;
 
+	// The list owns these model objects and nothing else refers to them: the
+	// callers only read their metadata. Clearing it alone leaked them all on
+	// every rebuild, that is on every plugin load.
+	qDeleteAll(VipProcessingManager::instance().d_data->_allObjects);
 	VipProcessingManager::instance().d_data->_allObjects.clear();
 	int count = types.size() + additionals.size();
 	for (int i = 0; i < count; ++i) {
@@ -3696,6 +3870,11 @@ QList<const VipProcessingObject*> VipProcessingObject::allObjects()
 			else
 				continue;
 		}
+		// Info::create() returns nullptr as soon as its metatype is no longer
+		// instantiable, which happens once a plugin is unloaded since the
+		// registered infos are never purged.
+		if (!obj)
+			continue;
 		VipProcessingManager::instance().d_data->_allObjects.append(obj);
 
 		// unlock the mutex: VipProcessingManager and VipUniqueId are already protected
@@ -3853,9 +4032,19 @@ VipProcessingList::VipProcessingList(QObject* parent)
 VipProcessingList::~VipProcessingList()
 {
 	setEnabled(false);
-	wait(false);
-	for (int i = 0; i < size(); ++i)
-		delete d_data->objects[i];
+	try {
+		wait(false);
+	}
+	catch (const std::exception& e) {
+		VIP_LOG_ERROR("VipProcessingList: " + QString(e.what()));
+	}
+	catch (...) {
+	}
+	// Take the objects out before destroying them: a callback triggered by one
+	// destruction used to see the ones already destroyed still in the container.
+	const QList<VipProcessingObject*> objects = std::move(d_data->objects);
+	d_data->objects.clear();
+	qDeleteAll(objects);
 }
 
 void VipProcessingList::computeParams()
@@ -3912,6 +4101,9 @@ bool VipProcessingList::insert(int index, VipProcessingObject* obj)
 {
 	QMutexLocker lock(&d_data->mutex);
 
+	// The position is public input: QList::insert past the end is undefined.
+	index = qBound(0, index, static_cast<int>(d_data->objects.size()));
+
 	if (d_data->objects.indexOf(obj) < 0) {
 		// make sur the object has at least on input and one output
 		if (obj->inputCount() == 0 && obj->topLevelInputCount() && obj->topLevelInputAt(0)->toMultiInput())
@@ -3964,6 +4156,8 @@ int VipProcessingList::indexOf(VipProcessingObject* obj) const
 VipProcessingObject* VipProcessingList::at(int i) const
 {
 	QMutexLocker lock(&d_data->mutex);
+	if (i < 0 || i >= d_data->objects.size())
+		return nullptr;
 	return const_cast<VipProcessingObject*>(d_data->objects[i]);
 }
 
@@ -3971,6 +4165,8 @@ VipProcessingObject* VipProcessingList::take(int i)
 {
 	QMutexLocker lock(&d_data->mutex);
 
+	if (i < 0 || i >= d_data->objects.size())
+		return nullptr;
 	VipProcessingObject* obj = d_data->objects[i];
 	d_data->objects.removeOne(obj);
 	obj->d_data->parentList = nullptr;
@@ -4116,7 +4312,8 @@ void VipProcessingList::applyFrom(VipProcessingObject* obj)
 			d_data->objects[0]->update(true);
 
 			if (d_data->objects[0]->hasError()) {
-				this->setError(d_data->objects[0]->lastErrors().last());
+				if (d_data->objects[0]->lastErrors().size())
+					this->setError(d_data->objects[0]->lastErrors().last());
 			}
 			else {
 				VipAnyData tmp = d_data->objects[0]->outputAt(0)->data();
@@ -4237,7 +4434,9 @@ VipSceneModelBasedProcessing::VipSceneModelBasedProcessing(QObject* parent)
   : VipProcessingObject(parent)
 {
 	VIP_CREATE_PRIVATE_DATA();
-	this->topLevelPropertyAt(1)->toMultiProperty()->resize(1);
+	if (VipProcessingIO* io = this->topLevelPropertyName("shape_ids"))
+		if (VipMultiProperty* mp = io->toMultiProperty())
+			mp->resize(1);
 }
 
 VipSceneModelBasedProcessing::~VipSceneModelBasedProcessing()
@@ -4458,7 +4657,10 @@ void VipSceneModelBasedProcessing::setSceneModel(const VipSceneModel& scene, con
 {
 	this->propertyAt(0)->setData(VipAnyData(QVariant::fromValue(VipLazySceneModel(scene)), VipInvalidTime));
 	if (!identifier.isEmpty()) {
-		this->propertyAt(1)->setData(identifier);
+		// By name, like the reader: the size of the shape_ids multi-property is
+		// not fixed by the class.
+		if (VipProperty* ids_prop = this->propertyName("shape_ids"))
+			ids_prop->setData(identifier);
 	}
 	d_data->rawScene = scene;
 	d_data->lazyScene = VipLazySceneModel(scene);
@@ -4478,7 +4680,8 @@ void VipSceneModelBasedProcessing::setSceneModel(const VipSceneModel& scene, con
 void VipSceneModelBasedProcessing::setSceneModel(const VipSceneModel& scene, const QStringList& identifiers)
 {
 	this->propertyAt(0)->setData(VipAnyData(QVariant::fromValue(VipLazySceneModel(scene)), VipInvalidTime));
-	this->propertyAt(1)->setData(VipAnyData(QVariant::fromValue(identifiers), VipInvalidTime));
+	if (VipProperty* ids_prop = this->propertyName("shape_ids"))
+		ids_prop->setData(VipAnyData(QVariant::fromValue(identifiers), VipInvalidTime));
 
 	d_data->rawScene = scene;
 	d_data->lazyScene = VipLazySceneModel(scene);
@@ -4823,30 +5026,54 @@ VipArchive& operator<<(VipArchive& stream, const VipProcessingObject* r)
 	return stream;
 }
 
+// Only the declared flags, so a value from a file cannot set bits the enumeration
+// does not define.
+static VipProcessingObject::ScheduleStrategies toScheduleStrategies(int value)
+{
+	const int declared = VipProcessingObject::AllInputs | VipProcessingObject::Asynchronous | VipProcessingObject::SkipIfBusy | VipProcessingObject::AcceptEmptyInput |
+			     VipProcessingObject::SkipIfNoInput | VipProcessingObject::NoThread;
+	return static_cast<VipProcessingObject::ScheduleStrategies>(value & declared);
+}
+
 VipArchive& operator>>(VipArchive& stream, VipProcessingObject* r)
 {
-	r->clearConnections();
-
+	// Read first, apply second: the connections used to be dropped on the first
+	// line, so a truncated archive left the object disconnected and half set.
 	QString name;
 	stream.content("processing_name", name);
+	const QVariantMap attributes = stream.read("attributes").value<QVariantMap>();
+	const int strategies = stream.read("scheduleStrategies").toInt();
+	const bool is_enabled = stream.read("isEnabled").toBool();
+	const bool is_visible = stream.read("isVisible").toBool();
+	const bool delete_on_closed = stream.read("deleteOnOutputConnectionsClosed").toBool();
+
+	if (stream.hasError()) {
+		stream.resetError();
+		return stream;
+	}
+
+	r->clearConnections();
 	r->setObjectName(name);
 
 	// set the attributes, but keep the 'Name' one (used in VipIODevice)
-	name = r->attribute("Name").toString();
-	r->setAttributes(stream.read("attributes").value<QVariantMap>());
-	if (!name.isEmpty())
-		r->setAttribute("Name", name);
+	const QString kept_name = r->attribute("Name").toString();
+	r->setAttributes(attributes);
+	if (!kept_name.isEmpty())
+		r->setAttribute("Name", kept_name);
 
-	r->setScheduleStrategies((VipProcessingObject::ScheduleStrategies)stream.read("scheduleStrategies").toInt());
-	r->setEnabled(stream.read("isEnabled").toBool());
-	r->setProcessingVisible(stream.read("isVisible").toBool());
-	r->setDeleteOnOutputConnectionsClosed(stream.read("deleteOnOutputConnectionsClosed").toBool());
+	r->setScheduleStrategies(toScheduleStrategies(strategies));
+	r->setEnabled(is_enabled);
+	r->setProcessingVisible(is_visible);
+	r->setDeleteOnOutputConnectionsClosed(delete_on_closed);
 
 	// added in 2.2.14
 	// find the registered processing info (if any)
 	stream.save();
 	QString registered;
 	if (stream.content("registered", registered)) {
+		// The save point is dropped, not rewound: leaving it on the stack made the
+		// next restore() of an enclosing reader rewind to this position.
+		stream.discardSave();
 		if (registered.size()) {
 			// find the corresponding info object
 			const QList<VipProcessingObject::Info> infos = VipProcessingObject::additionalInfoObjects();
@@ -4967,12 +5194,14 @@ void serialize_VipDataListManager(VipArchive& arch)
 			bool has_error = arch.hasError();
 			arch.resetError();
 
-			if (!VipProcessingManager::instance().d_data->_lock_list_manager) {
+			// A truncated archive gives five default values, and applying four of
+			// them anyway reset the whole process to a zero list limit and an
+			// empty priority map.
+			if (!has_error && !VipProcessingManager::instance().d_data->_lock_list_manager) {
 				VipProcessingManager::setListLimitType(limit_type);
 				VipProcessingManager::setMaxListSize(max_list_size);
 				VipProcessingManager::setMaxListMemory(max_memory);
-				if (!has_error)
-					VipProcessingManager::setLogErrors(logErrors);
+				VipProcessingManager::setLogErrors(logErrors);
 				VipProcessingManager::setDefaultPriorities(prio);
 			}
 

@@ -700,9 +700,12 @@ public:
 		return ptr() + vipFlatOffset<(D > 0 && D == NDims)>(strides(), c);
 	}
 
-	// Reimplement shape() and strides()
-	VIP_ALWAYS_INLINE const VipCoordinate<NDims>& shape() const noexcept { return reinterpret_cast<const VipCoordinate<NDims>&>(VipNDArray::shape()); }
-	VIP_ALWAYS_INLINE const VipCoordinate<NDims>& strides() const noexcept { return reinterpret_cast<const VipCoordinate<NDims>&>(VipNDArray::strides()); }
+	// Reimplement shape() and strides(), by value rather than by reinterpreting the
+	// representation: the dynamic vector the base returns and the fixed size one
+	// asked for here are two distinct classes with two layouts, and they coincide
+	// only when NDims is the default.
+	VIP_ALWAYS_INLINE VipCoordinate<NDims> shape() const noexcept { return VipCoordinate<NDims>(VipNDArray::shape()); }
+	VIP_ALWAYS_INLINE VipCoordinate<NDims> strides() const noexcept { return VipCoordinate<NDims>(VipNDArray::strides()); }
 
 	// Iterator support
 
@@ -922,9 +925,12 @@ public:
 	VIP_ALWAYS_INLINE const T* data() const noexcept { return ptr(); }
 	VIP_ALWAYS_INLINE const T* constData() const noexcept { return ptr(); }
 
-	// Reimplement shape() and strides()
-	VIP_ALWAYS_INLINE const VipCoordinate<NDims>& shape() const noexcept { return reinterpret_cast<const VipCoordinate<NDims>&>(VipNDArray::shape()); }
-	VIP_ALWAYS_INLINE const VipCoordinate<NDims>& strides() const noexcept { return reinterpret_cast<const VipCoordinate<NDims>&>(VipNDArray::strides()); }
+	// Reimplement shape() and strides(), by value rather than by reinterpreting the
+	// representation: the dynamic vector the base returns and the fixed size one
+	// asked for here are two distinct classes with two layouts, and they coincide
+	// only when NDims is the default.
+	VIP_ALWAYS_INLINE VipCoordinate<NDims> shape() const noexcept { return VipCoordinate<NDims>(VipNDArray::shape()); }
+	VIP_ALWAYS_INLINE VipCoordinate<NDims> strides() const noexcept { return VipCoordinate<NDims>(VipNDArray::strides()); }
 
 	template<qsizetype D>
 	VIP_ALWAYS_INLINE qsizetype flatIndex(const VipCoordinate<D>& c) const noexcept

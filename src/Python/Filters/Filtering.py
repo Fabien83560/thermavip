@@ -200,9 +200,11 @@ class ThermavipWienerFilter(th.ThermavipPyProcessing):
 
     def apply(self, data, time):
         Noise = self.noise
-        if Noise == 0:
+        if not Noise:
             Noise = None
-        return sig.wiener(data, self.kernel_size,self.noise)
+        # Noise, not self.noise: the guard just above computes the value that asks
+        # for the automatic estimation the docstring promises, and it was dropped.
+        return sig.wiener(data, self.kernel_size, Noise)
         
     def parameters(self):
         return {"KernelSize":("int",self.kernel_size,3,31,2) , \

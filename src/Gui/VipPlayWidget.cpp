@@ -1534,6 +1534,11 @@ void VipPlayerArea::setTimeRangesLocked(bool locked)
 
 void VipPlayerArea::setTimeRangeVisible(bool visible)
 {
+	// The pool is a QPointer, and setProcessingPool(nullptr) is called when a
+	// workspace closes while the time scale stays on screen: a click on it reaches
+	// these methods, which used the pool without a word.
+	if (!d_data->pool)
+		return;
 	d_data->visible = visible;
 	for (int i = 0; i < d_data->items.size(); ++i) {
 		if (visible)
@@ -1559,6 +1564,8 @@ bool VipPlayerArea::timeRangeVisible() const
 
 bool VipPlayerArea::limitsEnabled() const
 {
+	if (!d_data->pool)
+		return false;
 	return d_data->pool->testMode(VipProcessingPool::UseTimeLimits);
 }
 
@@ -1614,6 +1621,8 @@ void VipPlayerArea::paint(QPainter* painter, const QStyleOptionGraphicsItem* opt
 
 void VipPlayerArea::setLimit1(double t)
 {
+	if (!d_data->pool)
+		return;
 	d_data->limit1Marker->setRawData(QPointF(t, 0));
 	d_data->limit1Grip->blockSignals(true);
 	d_data->limit1Grip->setValue(t);
@@ -1624,6 +1633,8 @@ void VipPlayerArea::setLimit1(double t)
 
 void VipPlayerArea::setLimit2(double t)
 {
+	if (!d_data->pool)
+		return;
 	d_data->limit2Marker->setRawData(QPointF(t, 0));
 	d_data->limit2Grip->blockSignals(true);
 	d_data->limit2Grip->setValue(t);
@@ -1634,6 +1645,8 @@ void VipPlayerArea::setLimit2(double t)
 
 void VipPlayerArea::setLimitsEnable(bool enable)
 {
+	if (!d_data->pool)
+		return;
 	d_data->limit1Marker->setItemAttribute(VipPlotItem::AutoScale, enable);
 	d_data->limit1Marker->setVisible(enable && d_data->visible);
 	d_data->limit1Grip->setVisible(enable);
@@ -1656,6 +1669,12 @@ void VipPlayerArea::setTime64(qint64 t)
 
 void VipPlayerArea::setTime(double t)
 {
+	// Captured once: the wait below pumps the event loop, and the pool can be
+	// destroyed while it does.
+	VipProcessingPool* pool = d_data->pool;
+	if (!pool)
+		return;
+
 	// set the selection time range
 	if (qApp->keyboardModifiers() & Qt::SHIFT) {
 		if (d_data->selectionTimeRange == VipInvalidTimeRange) {
@@ -1669,18 +1688,18 @@ void VipPlayerArea::setTime(double t)
 		d_data->selectionTimeRange = VipTimeRange(t, t);
 	}
 
-	if (t < d_data->pool->firstTime())
-		t = d_data->pool->firstTime();
-	else if (t > d_data->pool->lastTime())
-		t = d_data->pool->lastTime();
+	if (t < pool->firstTime())
+		t = pool->firstTime();
+	else if (t > pool->lastTime())
+		t = pool->lastTime();
 
 	d_data->timeMarker->setRawData(QPointF(t, 0));
 	d_data->timeSliderGrip->blockSignals(true);
 	d_data->timeSliderGrip->setValue(t);
 	d_data->timeSliderGrip->blockSignals(false);
 	if (sender() != processingPool()) {
-		d_data->pool->read(t);
-		VipProcessingObjectList objects = d_data->pool->leafs(false);
+		pool->read(t);
+		VipProcessingObjectList objects = pool->leafs(false);
 		objects.wait();
 	}
 }
@@ -1915,9 +1934,15 @@ QList<VipTimeRangeListItem*> VipPlayerArea::timeRangeListItems() const
 
 void VipPlayerArea::timeRangeItems(QList<VipTimeRangeItem*>& selected, QList<VipTimeRangeItem*>& not_selected) const
 {
-	QList<VipPlotItem*> items = this->plotItems();
-	for (int i = 0; i < items.size(); ++i) {
-		if (VipTimeRangeItem* item = qobject_cast<VipTimeRangeItem*>(items[i])) {
+	// Through the lists that hold them, not through the plot items: a time range
+	// item is not a plot item, so the cast could only ever give nothing and the
+	// three menu entries that depend on this did nothing at all.
+	for (VipTimeRangeListItem* list : d_data->items) {
+		if (!list)
+			continue;
+		for (VipTimeRangeItem* item : list->items()) {
+			if (!item)
+				continue;
 			if (item->isSelected())
 				selected << item;
 			else

@@ -469,6 +469,9 @@ public Q_SLOTS:
 	void resetSizes();
 
 Q_SIGNALS:
+	/// Emitted when a child is added to or removed from the splitter.
+	/// @a w is null when @a added is false: a removal is signalled from the
+	/// child's destructor, so the pointer would already be dangling.
 	void childChanged(QSplitter* s, QWidget* w, bool added);
 
 private Q_SLOTS:

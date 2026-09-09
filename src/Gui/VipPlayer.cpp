@@ -854,7 +854,9 @@ QMenu* VipPlayer2D::generateToolTipMenu()
 {
 	VipToolTip::DisplayFlags flags = VipPlayerToolTip::toolTipFlags(this->metaObject());
 
-	QMenu* menu = new QMenu();
+	// Parented: the action this menu is attached to does not take ownership, so an
+	// unparented one outlived every right click.
+	QMenu* menu = new QMenu(this);
 	menu->setToolTipsVisible(true);
 	QAction* hidden = menu->addAction("Tool tip hidden");
 	hidden->setData((int)VipToolTip::Hidden);
@@ -5208,11 +5210,20 @@ VipAnyResource* VipVideoPlayer::extractPolylineValuesAlongTime(const VipShape& s
 
 	// build the result
 	if (curves.size()) {
-		VipNDArrayType<double> ar(vipVector(curves.first().size(), curves.size()));
+		// On the longest polyline, not on the first: an extracted polyline is
+		// recomputed on every frame and is shorter as soon as it leaves the image or
+		// the resolution changes, and the writing loop below was bounded by the
+		// length of the frame, not by the height of the array.
+		int rows = 0;
+		for (const VipPointVector& c : curves)
+			rows = qMax(rows, (int)c.size());
+
+		VipNDArrayType<double> ar(vipVector(rows, curves.size()));
+		ar.fill(vipNan());
 		for (int i = 0; i < curves.size(); ++i) {
 			double* ptr = ar.ptr(vipVector(0, i));
 			const VipPointVector& pts = curves[i];
-			for (int y = 0; y < pts.size(); ++y)
+			for (int y = 0; y < qMin((int)pts.size(), rows); ++y)
 				ptr[y * curves.size()] = pts[y].y();
 		}
 
@@ -7018,17 +7029,19 @@ void VipPlotPlayer::setProcessingPool(VipProcessingPool* pool)
 		disconnect(d_data->pool, SIGNAL(deviceTypeChanged()), this, SLOT(poolTypeChanged()));
 	}
 
+	// Assigned in both cases: setting no pool used to leave the old one here while
+	// the base class had none.
+	d_data->pool = pool;
 	if (pool) {
-		d_data->pool = pool;
 		connect(pool, SIGNAL(timeChanged(qint64)), this, SLOT(timeChanged()));
-		connect(d_data->pool, SIGNAL(deviceTypeChanged()), this, SLOT(poolTypeChanged()));
+		connect(pool, SIGNAL(deviceTypeChanged()), this, SLOT(poolTypeChanged()));
 	}
 
 	poolTypeChanged();
 
 	// when we set the processing pool, force time marker
 	if (d_data->timeMarkerAlwaysVisible)
-		setTimeMarkerVisible(processingPool()->deviceType() == VipIODevice::Temporal);
+		setTimeMarkerVisible(pool && pool->deviceType() == VipIODevice::Temporal);
 }
 
 QGraphicsObject* VipPlotPlayer::defaultEditableObject() const
@@ -8347,7 +8360,8 @@ static QList<QAction*> applyDataProcessing(VipPlotItemData* item, VipPlayer2D* p
 {
 	// add a submenu displaying a list of processings to apply to the item's data
 	if (item->data().userType() && item->isSelected()) {
-		VipProcessingObjectMenu* menu = new VipProcessingObjectMenu();
+		// Same here: setMenu does not take ownership.
+		VipProcessingObjectMenu* menu = new VipProcessingObjectMenu(player);
 		if (VipVideoPlayer* pl = qobject_cast<VipVideoPlayer*>(player))
 			// specific menu for VipVideoPlayer
 			__create_video_processing_menu(menu, pl);

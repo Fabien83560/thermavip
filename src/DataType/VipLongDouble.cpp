@@ -72,7 +72,9 @@ QByteArray vipLongDoubleToByteArray(const vip_long_double v)
 vip_long_double vipLongDoubleFromString(const QString& str, bool* ok)
 {
 	std::istringstream ss(str.toLatin1().data());
-	vip_long_double res;
+	// Initialised: a failed extraction leaves it untouched, and the four callers
+	// of these functions all omit the flag that would tell them.
+	vip_long_double res = 0;
 	ss >> res;
 	if (ok)
 		*ok = !ss.fail();
@@ -81,7 +83,9 @@ vip_long_double vipLongDoubleFromString(const QString& str, bool* ok)
 vip_long_double vipLongDoubleFromByteArray(const QByteArray& str, bool* ok)
 {
 	std::istringstream ss(str.data());
-	vip_long_double res;
+	// Initialised: a failed extraction leaves it untouched, and the four callers
+	// of these functions all omit the flag that would tell them.
+	vip_long_double res = 0;
 	ss >> res;
 	if (ok)
 		*ok = !ss.fail();
@@ -148,7 +152,9 @@ vip_long_double vipLongDoubleFromStringLocale(const QString& str, const QLocale&
 	if (l.language() != //_locale.language()
 	    QLocale::C)
 		ss.imbue(vipToStdLocale(l)); // std::locale(l.name().toLatin1().data()));
-	vip_long_double res;
+	// Initialised: a failed extraction leaves it untouched, and the four callers
+	// of these functions all omit the flag that would tell them.
+	vip_long_double res = 0;
 	ss >> res;
 	if (ok)
 		*ok = !ss.fail();
@@ -159,7 +165,9 @@ vip_long_double vipLongDoubleFromByteArrayLocale(const QByteArray& str, const QL
 	std::istringstream ss(str.data());
 	if (l.language() != QLocale::C) //_locale.language())
 		ss.imbue(vipToStdLocale(l));
-	vip_long_double res;
+	// Initialised: a failed extraction leaves it untouched, and the four callers
+	// of these functions all omit the flag that would tell them.
+	vip_long_double res = 0;
 	ss >> res;
 	if (ok)
 		*ok = !ss.fail();
