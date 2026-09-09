@@ -8,12 +8,16 @@
 #include "vip_test_main.h"
 
 #include <QDir>
+#include <QElapsedTimer>
+#include <complex>
 #include <type_traits>
 
 #include "VipCircularVector.h"
 #include "VipIterator.h"
 #include "VipNDArray.h"
 #include "VipHash.h"
+#include "VipMath.h"
+#include "VipSleep.h"
 #include "VipLock.h"
 #include "VipLongDouble.h"
 #include "VipVectors.h"
@@ -492,6 +496,37 @@ private Q_SLOTS:
 		QCOMPARE(vec.size(), (qsizetype)2);
 		QCOMPARE(vec[0], QStringLiteral("first"));
 		QCOMPARE(vec[1], QStringLiteral("second"));
+	}
+
+	/// The modulus of a complex number is a magnitude, not a flag. The overload
+	/// declared bool as its return type, and the modulus converts to bool without
+	/// a word from the compiler: every non zero amplitude came out as one.
+	void theModulusOfAComplexIsAMagnitude()
+	{
+		QCOMPARE(vipAbs(std::complex<double>(3.0, 4.0)), 5.0);
+		QCOMPARE(vipAbs(std::complex<float>(3.f, 4.f)), 5.f);
+		QVERIFY((std::is_same<decltype(vipAbs(std::complex<double>())), double>::value));
+
+		QCOMPARE(vipFloor(std::complex<double>(1.7, -1.2)), std::complex<double>(1.0, -2.0));
+		QCOMPARE(vipCeil(std::complex<double>(1.2, -1.7)), std::complex<double>(2.0, -1.0));
+		QCOMPARE(vipRound(std::complex<double>(1.6, -1.6)), std::complex<double>(2.0, -2.0));
+	}
+
+	/// A duration reaches a conversion to an unsigned integer, undefined outside
+	/// its range: a negative one used to sleep for over an hour on one platform
+	/// and return at once on the other.
+	void sleepingForANegativeDurationReturnsAtOnce()
+	{
+		QElapsedTimer timer;
+		timer.start();
+		vipSleep(-5);
+		vipSleep(-1e12);
+		vipSleep(vipNan());
+		QVERIFY2(timer.elapsed() < 500, "a duration that is not positive must return at once");
+
+		timer.restart();
+		vipSleep(30);
+		QVERIFY2(timer.elapsed() >= 10, "an ordinary duration must still wait");
 	}
 };
 
