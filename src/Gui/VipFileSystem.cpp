@@ -92,7 +92,11 @@ public:
 	
 	QMutex mutex;
 	QFileInfo info;
-	QPixmap res_icon;
+	// An image, not a pixmap. A pixmap is backed by the rendering of the platform
+	// and belongs to the thread of the interface; this one is built here, in a
+	// worker. Only the image content really crosses the boundary, and the pixmap
+	// is made on the other side.
+	QImage res_image;
 	QFileIconProvider* provider_ptr{ nullptr };
 
 	virtual void run()
@@ -118,11 +122,12 @@ public:
 				// successes, where the icon was then leaked.
 				if (hr != 0 && file.hIcon) {
 					// The display name is now held in sfi.szDisplayName.
-					res_icon = QPixmap::fromImage(QImage::fromHICON(file.hIcon));
+					res_image = QImage::fromHICON(file.hIcon);
 					DestroyIcon(file.hIcon);
 				}
 			#else
-				res_icon = provider.icon(info).pixmap(QSize(30, 30));
+				// The provider of the platform only offers a pixmap here.
+				res_image = provider.icon(info).pixmap(QSize(30, 30)).toImage();
 			#endif
 			//
 			has_icon = true;
@@ -147,7 +152,7 @@ public:
 		if (!mutex.try_lock_for(std::chrono::milliseconds(wait_for_ms)))
 			return QPixmap();
 		info = i;
-		res_icon = QPixmap();
+		res_image = QImage();
 		has_icon = false;
 		mutex.unlock();
 		while (!has_icon) {
@@ -160,10 +165,11 @@ public:
 			return QPixmap();
 		if (!mutex.try_lock_for(std::chrono::milliseconds(rem)))
 			return QPixmap();
-		QPixmap res = res_icon;
-		res_icon = QPixmap();
+		QImage res = res_image;
+		res_image = QImage();
 		mutex.unlock();
-		return res;
+		// Built here, in the thread that asked for it.
+		return QPixmap::fromImage(res);
 	}
 };
 
@@ -467,13 +473,21 @@ void VipMapFileSystemTreeItem::setAttributes(const QVariantMap& attrs)
 	if (isCustom())
 		return;
 
-	m_path.setAttributes(attrs);
+	{
+		QMutexLocker lock(&m_mutex);
+		m_path.setAttributes(attrs);
+	}
+
+	// One copy, taken once: the member is written by the other thread as well,
+	// and every field of it is implicitly shared.
+	const VipPath p = path();
+
 	// update file attributes
-	setIcon(0, tree()->mapFileSystem()->iconPath(m_path));
-	if (!path().isEmpty())
-		setText(0, QFileInfo(m_path.canonicalPath()).fileName());
-	else if (m_path.mapFileSystem())
-		setText(0, m_path.mapFileSystem()->objectName());
+	setIcon(0, tree()->mapFileSystem()->iconPath(p));
+	if (!p.isEmpty())
+		setText(0, QFileInfo(p.canonicalPath()).fileName());
+	else if (p.mapFileSystem())
+		setText(0, p.mapFileSystem()->objectName());
 
 	const QStringList std = tree()->mapFileSystem()->standardAttributes();
 	QString size, date;
@@ -511,16 +525,17 @@ void VipMapFileSystemTreeItem::setAttributes(const QVariantMap& attrs)
 		}
 	}
 
-	if (m_path.isDir())
-		this->setToolTip(0, "<b>Path: </b>" + path().canonicalPath() + "<br><b>Last modified: </b>" + date);
+	if (p.isDir())
+		this->setToolTip(0, "<b>Path: </b>" + p.canonicalPath() + "<br><b>Last modified: </b>" + date);
 	else
-		this->setToolTip(0, "<b>Path: </b>" + path().canonicalPath() + "<br><b>Size: </b>" + size + "<br><b>Last modified: </b>" + date);
+		this->setToolTip(0, "<b>Path: </b>" + p.canonicalPath() + "<br><b>Size: </b>" + size + "<br><b>Last modified: </b>" + date);
 }
 
 VipPath VipMapFileSystemTreeItem::path() const
 {
+	QMutexLocker lock(&m_mutex);
 	if (!m_path.mapFileSystem() && tree())
-		const_cast<VipPath&>(m_path).setMapFileSystem(tree()->mapFileSystem());
+		m_path.setMapFileSystem(tree()->mapFileSystem());
 
 	return m_path;
 }
