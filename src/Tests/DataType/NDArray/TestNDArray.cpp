@@ -9,6 +9,7 @@
 #include "vip_test_main.h"
 
 #include "VipNDArray.h"
+#include "VipStack.h"
 
 #include <vector>
 
@@ -119,6 +120,37 @@ private Q_SLOTS:
 
 		// And the buffer belongs to the caller: it is still readable here.
 		QCOMPARE(owned[0], 3.5);
+	}
+
+	/// The axis of a stack comes from the caller and is used as an index into a
+	/// shape held on the stack, twice to write. The only bound was a debug
+	/// assertion, which is nothing in a release build.
+	void stackingRefusesAnAxisOutOfRange()
+	{
+		VipNDArrayType<double> a(vipVector(2, 3));
+		VipNDArrayType<double> b(vipVector(2, 3));
+
+		QVERIFY(vipStack(VipNDArray(a), VipNDArray(b), 7).isEmpty());
+		QVERIFY(vipStack(VipNDArray(a), VipNDArray(b), -1).isEmpty());
+
+		VipNDArray dst(qMetaTypeId<double>(), vipVector(4, 3));
+		QVERIFY(!vipStack(dst, VipNDArray(a), VipNDArray(b), 7));
+		QVERIFY(!vipStack(dst, VipNDArray(a), VipNDArray(b), -1));
+
+		// And the ordinary case still works.
+		QVERIFY(vipStack(dst, VipNDArray(a), VipNDArray(b), 0));
+		QCOMPARE(vipStack(VipNDArray(a), VipNDArray(b), 0).shape(), vipVector(4, 3));
+	}
+
+	/// The guard on the shapes compared the same two things twice, so the shape of
+	/// the destination was never checked at all.
+	void stackingRefusesADestinationOfTheWrongShape()
+	{
+		VipNDArrayType<double> a(vipVector(2, 3));
+		VipNDArrayType<double> b(vipVector(2, 3));
+
+		VipNDArray narrow(qMetaTypeId<double>(), vipVector(4, 2));
+		QVERIFY2(!vipStack(narrow, VipNDArray(a), VipNDArray(b), 0), "a destination that is too narrow must be refused");
 	}
 };
 
