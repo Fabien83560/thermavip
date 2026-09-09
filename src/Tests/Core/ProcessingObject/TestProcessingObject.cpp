@@ -65,6 +65,23 @@ protected:
 	void apply() override { outputAt(0)->setData(create(QVariant(inputAt(0)->data().value<double>() + 1.0))); }
 };
 
+/// Carries a multi input, so the container operations can be exercised.
+class MultiInputProcessing : public VipProcessingObject
+{
+	Q_OBJECT
+	VIP_IO(VipMultiInput inputs)
+	VIP_IO(VipOutput output)
+
+public:
+	MultiInputProcessing(QObject* parent = nullptr)
+	  : VipProcessingObject(parent)
+	{
+	}
+
+protected:
+	void apply() override {}
+};
+
 // ---------------------------------------------------------------------------
 
 class TestProcessingObject : public QObject
@@ -529,6 +546,52 @@ private Q_SLOTS:
 		const qint64 footprint = any.memoryFootprint();
 		QVERIFY2(footprint > 0, "a large array must not report a negative footprint");
 		QVERIFY(footprint >= Q_INT64_C(256) * 1024 * 1024);
+	}
+
+	// -- Multiple inputs -----------------------------------------------------
+
+	/// Inserting anywhere but at the end configured the element that happened to be
+	/// last instead of the one just inserted, so the new entry was left unset. The
+	/// setter next to it writes the right one.
+	void insertingAnInputConfiguresTheInsertedOne()
+	{
+		MultiInputProcessing proc;
+		VipMultiInput* inputs = proc.topLevelInputAt(0)->toMultiInput();
+		QVERIFY(inputs);
+
+		QVERIFY(inputs->resize(3));
+		QCOMPARE(inputs->count(), 3);
+
+		QVERIFY(inputs->insert(0));
+		QCOMPARE(inputs->count(), 4);
+		for (int i = 0; i < inputs->count(); ++i)
+			QVERIFY2(inputs->at(i)->parentProcessing() == &proc, qPrintable(QStringLiteral("input %1 was left unconfigured").arg(i)));
+	}
+
+	/// An index outside the vector is refused rather than applied.
+	void insertingOutsideTheRangeIsRefused()
+	{
+		MultiInputProcessing proc;
+		VipMultiInput* inputs = proc.topLevelInputAt(0)->toMultiInput();
+		QVERIFY(inputs->resize(2));
+
+		QVERIFY(!inputs->insert(-1));
+		QVERIFY(!inputs->insert(99));
+		QCOMPARE(inputs->count(), 2);
+	}
+
+	/// The container is documented as empty by default, and back() on it is out of
+	/// bounds: both accessors used it without a test.
+	void anEmptyMultiInputHasNoData()
+	{
+		MultiInputProcessing proc;
+		VipMultiInput* inputs = proc.topLevelInputAt(0)->toMultiInput();
+		QVERIFY(inputs->resize(0));
+		QCOMPARE(inputs->count(), 0);
+
+		QVERIFY(!inputs->data().isValid());
+		inputs->setData(makeData(1.0)); // must not crash
+		QVERIFY(true);
 	}
 
 	// -- VipProcessingList ---------------------------------------------------
