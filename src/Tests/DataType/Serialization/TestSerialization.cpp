@@ -309,6 +309,42 @@ private Q_SLOTS:
 		const QString rest = stream.readAll().trimmed();
 		QCOMPARE(rest, QStringLiteral("end of line"));
 	}
+
+	/// The iterator that walks an array while skipping one dimension computed its
+	/// strides from the current position instead of from the shape. The constructor
+	/// zeroes that position, so every stride but the last was zero and the first
+	/// division of the first call divided by zero. Two dimensions hid it, the single
+	/// stride being 1; three did not. This runs on the parallel path of resizing,
+	/// once per thread.
+	void skippingIteratorPlacesItselfOnAThreeDimensionalShape()
+	{
+		const VipNDArrayShape shape = vipVector(2, 3, 4);
+		const qsizetype skip = 1;
+
+		for (qsizetype flat = 0; flat < 2 * 4; ++flat) {
+			detail::CIteratorFMajorSkipDim<VipNDArrayShape> it(shape, skip);
+			it.setFlatPosition(flat);
+
+			QCOMPARE(it.pos[skip], (qsizetype)0);
+			QCOMPARE(it.pos[0] * 4 + it.pos[2], flat);
+			QVERIFY(it.pos[0] < 2);
+			QVERIFY(it.pos[2] < 4);
+		}
+	}
+
+	/// The two dimensional case, which already worked, still does.
+	void skippingIteratorPlacesItselfOnATwoDimensionalShape()
+	{
+		const VipNDArrayShape shape = vipVector(3, 5);
+
+		for (qsizetype flat = 0; flat < 5; ++flat) {
+			detail::CIteratorFMajorSkipDim<VipNDArrayShape> it(shape, 0);
+			it.setFlatPosition(flat);
+
+			QCOMPARE(it.pos[0], (qsizetype)0);
+			QCOMPARE(it.pos[1], flat);
+		}
+	}
 };
 
 VIP_TEST_MAIN(TestSerialization)

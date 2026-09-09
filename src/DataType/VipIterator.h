@@ -889,22 +889,30 @@ namespace detail
 
 		void setFlatPosition(qsizetype offset)
 		{
+			// The strides have to come from the shape. This filled new_shape with the
+			// current position, which the constructor zeroes, so every stride but the
+			// last was zero and the first division of the first call divided by zero.
+			// Two dimensions hid it, the single stride being 1 there; three or more
+			// did not. The loop below also has to walk the positions, not the strides:
+			// there is one stride fewer than there are dimensions.
 			VipNDArrayShape new_shape(shape.size() - 1);
 			qsizetype index = 0;
 			for (qsizetype i = 0; i < shape.size(); ++i)
 				if (i != skip)
-					new_shape[index++] = pos[i];
-
-			index = 0;
+					new_shape[index++] = shape[i];
 
 			VipNDArrayShape strides;
 			vipComputeDefaultStrides<Vip::FirstMajor>(new_shape, strides);
-			for (qsizetype i = 0; i < strides.size(); ++i) {
+
+			index = 0;
+			for (qsizetype i = 0; i < shape.size(); ++i) {
 				if (i != skip) {
 					pos[i] = (offset / strides[index]);
 					offset = (offset % strides[index]);
 					++index;
 				}
+				else
+					pos[i] = 0;
 			}
 		}
 
