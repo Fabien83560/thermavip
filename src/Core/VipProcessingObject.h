@@ -2118,6 +2118,11 @@ private:
 
 	void run();
 	void runNoLock();
+	/// @brief Emit processingDone() for the last run of runNoLock(), if any.
+	/// Called by whoever ran it, once the lock serialising the run is released:
+	/// the signal reaches a processing list in a direct connection, and emitting
+	/// it under the lock closed a cycle with the mutex of that list.
+	void emitProcessingDone();
 	VipSpinlock& runLock() noexcept;
 	
 	VIP_DECLARE_PRIVATE_DATA();

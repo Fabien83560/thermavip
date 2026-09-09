@@ -2056,11 +2056,17 @@ void TaskPool::run()
 		int count = m_run.load(std::memory_order_relaxed);
 		int saved = count;
 		if (!m_stop) {
-			SPIN_LOCK(m_parent->runLock());
 			while (!m_stop && count-- && !m_clear.load(std::memory_order_relaxed)) {
 				try {
-					// Avoid exiting task pool thread on unhandled exception
-					m_parent->runNoLock();
+					// Avoid exiting task pool thread on unhandled exception.
+					// The lock is taken per call rather than around the loop, so
+					// that the signal below is emitted without it.
+					{
+						SPIN_LOCK(m_parent->runLock());
+						m_parent->runNoLock();
+					}
+					if (VipProcessingObject* o = qobject_cast<VipProcessingObject*>(m_parent))
+						o->emitProcessingDone();
 				}
 				catch (const std::exception& e) {
 					if (VipProcessingObject* o = qobject_cast<VipProcessingObject*>(m_parent))
@@ -2231,6 +2237,9 @@ public:
 	QList<Parameters> savedParameters;
 	int thread_priority;
 	bool destruct;
+	// Set by runNoLock, consumed by emitProcessingDone: the signal must not go out
+	// while the lock that serialises the run is held.
+	bool processingDonePending = false;
 
 	// inputs, outputs and properties
 	int initializeIO;
@@ -3621,9 +3630,16 @@ VipAnyDataList VipProcessingObject::allInputs()
 
 void VipProcessingObject::run()
 {
-	// lock to avoid concurrent calls
-	SPIN_LOCK(d_data->run_mutex);
-	runNoLock();
+	{
+		// lock to avoid concurrent calls
+		SPIN_LOCK(d_data->run_mutex);
+		runNoLock();
+	}
+	// Outside the lock: the signal reaches a processing list in a direct
+	// connection, which then takes the mutex of the list, while the other order
+	// is taken by the list applying its pipeline. Two threads closed the cycle,
+	// and the spinlock spins rather than blocks.
+	emitProcessingDone();
 }
 bool VipProcessingObject::isBeingDestroyed() const noexcept
 {
@@ -3680,6 +3696,16 @@ void VipProcessingObject::runNoLock()
 		d_data->processingTime = (QDateTime::currentMSecsSinceEpoch() - time) * 1000000;
 	else
 		d_data->processingTime = 0;
+	// The signal belongs outside the lock the callers hold around this: they emit
+	// it themselves, once this returns.
+	d_data->processingDonePending = true;
+}
+
+void VipProcessingObject::emitProcessingDone()
+{
+	if (!d_data->processingDonePending)
+		return;
+	d_data->processingDonePending = false;
 	Q_EMIT processingDone(this, d_data->processingTime);
 }
 
@@ -4015,7 +4041,10 @@ public:
 	}
 	QList<VipProcessingObject*> objects;
 	QList<VipProcessingObject*> directSources;
-	bool isApplying;
+	// Atomic and tested with an exchange: the flag is read by the thread of a child
+	// processing and written by the thread applying the list, and a plain read could
+	// see false just after another thread set it.
+	std::atomic<bool> isApplying;
 	bool useEventLoop;
 	qint64 lastTime;
 	QRecursiveMutex mutex;
@@ -4258,7 +4287,7 @@ QTransform VipProcessingList::imageTransform(bool* from_center) const
 void VipProcessingList::receivedProcessingDone(VipProcessingObject* obj, qint64)
 {
 	// VipProcessingObject * obj = qobject_cast<VipProcessingObject*>(sender());
-	if (obj && !d_data->isApplying) {
+	if (obj && !d_data->isApplying.load()) {
 		applyFrom(obj);
 	}
 }
@@ -4274,8 +4303,19 @@ void VipProcessingList::applyFrom(VipProcessingObject* obj)
 
 	QMutexLocker lock(&d_data->mutex);
 
-	if (d_data->isApplying)
+	// Exchanged, not tested then set: the flag is read from the thread of a child
+	// processing and written from the thread applying the list, and a plain read
+	// could see it false just after another thread had set it.
+	bool expected = false;
+	if (!d_data->isApplying.compare_exchange_strong(expected, true))
 		return;
+
+	// Cleared on every way out, including the early return below.
+	struct ClearApplying
+	{
+		std::atomic<bool>& flag;
+		~ClearApplying() { flag.store(false); }
+	} clear_applying{ d_data->isApplying };
 
 	computeParams();
 
@@ -4289,8 +4329,6 @@ void VipProcessingList::applyFrom(VipProcessingObject* obj)
 		outputAt(0)->setData(out);
 		return;
 	}
-
-	d_data->isApplying = true;
 
 	int index = -1;
 	if (obj) {
@@ -4373,7 +4411,6 @@ void VipProcessingList::applyFrom(VipProcessingObject* obj)
 
 	outputAt(0)->setData(out);
 
-	d_data->isApplying = false;
 
 	if (tr != d_data->transform) {
 		d_data->transform = tr;

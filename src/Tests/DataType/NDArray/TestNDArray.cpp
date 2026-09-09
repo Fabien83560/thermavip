@@ -11,6 +11,7 @@
 #include "VipNDArray.h"
 #include "VipMultiNDArray.h"
 #include "VipNDRect.h"
+#include "VipIterator.h"
 #include "VipNDArrayOperations.h"
 #include "VipResize.h"
 #include "VipNDArrayStatistics.h"
@@ -330,6 +331,41 @@ private Q_SLOTS:
 		VipNDArrayShape resized;
 		resized.resize(64);
 		QVERIFY(resized.size() <= VIP_MAX_DIMS);
+	}
+
+	/// Serialising an array walks its elements through the same transform the
+	/// arithmetic goes through, and that transform runs in parallel as soon as the
+	/// iteration thread count is raised. Several threads writing into one stream
+	/// race on it and, even without corrupting it, emit the elements in an
+	/// arbitrary order that the reader cannot detect.
+	void serialisingAnArrayKeepsItsOrderWithSeveralThreads()
+	{
+		const int previous = vipIterateThreadCount();
+		vipSetIterateThreadCount(8);
+
+		VipNDArrayType<double> source(vipVector(64, 64)); // over the parallel threshold
+		for (int y = 0; y < 64; ++y)
+			for (int x = 0; x < 64; ++x)
+				source(vipVector(y, x)) = y * 64 + x;
+
+		QByteArray buffer;
+		{
+			QDataStream out(&buffer, QIODevice::WriteOnly);
+			out << VipNDArray(source);
+		}
+		VipNDArray read;
+		{
+			QDataStream in(&buffer, QIODevice::ReadOnly);
+			in >> read;
+		}
+
+		vipSetIterateThreadCount(previous);
+
+		QCOMPARE(read.shape(), source.shape());
+		const VipNDArrayType<double> typed = read.toDouble();
+		for (int y = 0; y < 64; ++y)
+			for (int x = 0; x < 64; ++x)
+				QCOMPARE(typed(vipVector(y, x)), (double)(y * 64 + x));
 	}
 };
 

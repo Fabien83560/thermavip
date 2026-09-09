@@ -892,6 +892,37 @@ private Q_SLOTS:
 		QVERIFY2(observed.isNull(), "a device that is taken but not kept must be destroyed");
 		QCOMPARE(streaming.IODevice(), (VipIODevice*)inner);
 	}
+
+	/// The signal that says a processing is done reaches a processing list in a
+	/// direct connection, and that list then takes its own mutex; the list, while
+	/// holding that mutex, runs its children, which take the lock serialising a
+	/// run. Two threads closed the cycle, so the signal now goes out once that
+	/// lock is released, through a flag the run leaves behind. This pins the
+	/// contract of that flag: one signal per run, no more and no less.
+	void processingDoneIsEmittedOncePerRun()
+	{
+		MultiplyByProperty processing;
+		processing.inputAt(0)->setData(VipAnyData(QVariant(2.0), 0));
+
+		processing.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::NoThread);
+
+		// Running again from the slot needs the lock that serialises a run, and that
+		// lock does not nest: emitted from under it, this call spins for ever.
+		int depth = 0;
+		QObject::connect(&processing,
+				 &VipProcessingObject::processingDone,
+				 &processing,
+				 [&](VipProcessingObject* obj, qint64) {
+					 ++depth;
+				 },
+				 Qt::DirectConnection);
+
+		QVERIFY(processing.update(true));
+		QCOMPARE(depth, 1);
+
+		QVERIFY(processing.update(true));
+		QCOMPARE(depth, 2);
+	}
 };
 
 VIP_TEST_MAIN(TestProcessingObject)
