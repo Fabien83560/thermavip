@@ -4262,52 +4262,60 @@ bool VipProcessingList::remove(VipProcessingObject* obj)
 
 bool VipProcessingList::insert(int index, VipProcessingObject* obj)
 {
-	QMutexLocker lock(&d_data->mutex);
+	QList<QByteArray> names;
+	{
+		QMutexLocker lock(&d_data->mutex);
 
-	// The position is public input: QList::insert past the end is undefined.
-	index = qBound(0, index, static_cast<int>(d_data->objects.size()));
+		// The position is public input: QList::insert past the end is undefined.
+		index = qBound(0, index, static_cast<int>(d_data->objects.size()));
 
-	if (d_data->objects.indexOf(obj) < 0) {
+		if (d_data->objects.indexOf(obj) >= 0)
+			return false;
+
 		// make sur the object has at least on input and one output
 		if (obj->inputCount() == 0 && obj->topLevelInputCount() && obj->topLevelInputAt(0)->toMultiInput())
 			obj->topLevelInputAt(0)->toMultiInput()->resize(1);
 		if (obj->outputCount() == 0 && obj->topLevelOutputCount() && obj->topLevelOutputAt(0)->toMultiOutput())
 			obj->topLevelOutputAt(0)->toMultiOutput()->resize(1);
 
-		if (obj->inputCount() >= 1 && obj->outputCount() >= 1) {
-			obj->d_data->parentList = this;
-			obj->setProperty("VipProcessingList", QVariant::fromValue(this));
-			obj->setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::NoThread);
+		if (obj->inputCount() < 1 || obj->outputCount() < 1)
+			return false;
 
-			// set the first input data
-			VipAnyData any;
-			if (index - 1 >= 0 && index - 1 < size())
-				any = d_data->objects[index - 1]->outputAt(0)->data();
-			else
-				any = inputAt(0)->probe();
+		obj->d_data->parentList = this;
+		obj->setProperty("VipProcessingList", QVariant::fromValue(this));
+		obj->setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::NoThread);
 
-			obj->inputAt(0)->setData(any);
-			obj->inputAt(0)->data();
-			obj->setParent(nullptr);
+		// set the first input data
+		VipAnyData any;
+		if (index - 1 >= 0 && index - 1 < d_data->objects.size())
+			any = d_data->objects[index - 1]->outputAt(0)->data();
+		else
+			any = inputAt(0)->probe();
 
-			// set the source properties to the VipProcessingObject
-			QList<QByteArray> names = sourceProperties();
-			for (int i = 0; i < names.size(); ++i)
-				obj->setSourceProperty(names[i].data(), this->property(names[i].data()));
+		obj->inputAt(0)->setData(any);
+		obj->inputAt(0)->data();
+		obj->setParent(nullptr);
 
-			connect(obj, SIGNAL(processingDone(VipProcessingObject*, qint64)), this, SLOT(receivedProcessingDone(VipProcessingObject*, qint64)), Qt::DirectConnection);
+		names = sourceProperties();
 
-			d_data->objects.insert(index, obj);
-			d_data->transform = computeTransform();
-			computeParams();
-			emitImageTransformChanged();
-			emitProcessingChanged();
+		connect(obj, SIGNAL(processingDone(VipProcessingObject*, qint64)), this, SLOT(receivedProcessingDone(VipProcessingObject*, qint64)), Qt::DirectConnection);
 
-			return true;
-		}
+		d_data->objects.insert(index, obj);
+		d_data->transform = computeTransform();
+		computeParams();
 	}
 
-	return false;
+	// Outside the lock: setSourceProperty is virtual and reimplemented outside
+	// this file, plugins included, and the two signals below reach direct
+	// connections, so their slots run here as well. None of that belongs under
+	// the mutex that every reader of the list waits on.
+	for (int i = 0; i < names.size(); ++i)
+		obj->setSourceProperty(names[i].data(), this->property(names[i].data()));
+
+	emitImageTransformChanged();
+	emitProcessingChanged();
+
+	return true;
 }
 
 int VipProcessingList::indexOf(VipProcessingObject* obj) const
@@ -4326,24 +4334,30 @@ VipProcessingObject* VipProcessingList::at(int i) const
 
 VipProcessingObject* VipProcessingList::take(int i)
 {
-	QMutexLocker lock(&d_data->mutex);
+	VipProcessingObject* obj = nullptr;
+	QList<QByteArray> names;
+	{
+		QMutexLocker lock(&d_data->mutex);
 
-	if (i < 0 || i >= d_data->objects.size())
-		return nullptr;
-	VipProcessingObject* obj = d_data->objects[i];
-	d_data->objects.removeOne(obj);
-	obj->d_data->parentList = nullptr;
-	obj->setProperty("VipProcessingList", QVariant());
+		if (i < 0 || i >= d_data->objects.size())
+			return nullptr;
+		obj = d_data->objects[i];
+		d_data->objects.removeOne(obj);
+		obj->d_data->parentList = nullptr;
+		obj->setProperty("VipProcessingList", QVariant());
 
-	// remove the source properties from the VipProcessingObject
-	QList<QByteArray> names = sourceProperties();
+		names = sourceProperties();
+
+		disconnect(obj, SIGNAL(processingDone(VipProcessingObject*, qint64)), this, SLOT(receivedProcessingDone(VipProcessingObject*, qint64)));
+
+		d_data->transform = computeTransform();
+		computeParams();
+	}
+
+	// remove the source properties from the VipProcessingObject, outside the lock
 	for (const QByteArray& name : names)
 		obj->setSourceProperty(name.data(), QVariant());
 
-	disconnect(obj, SIGNAL(processingDone(VipProcessingObject*, qint64)), this, SLOT(receivedProcessingDone(VipProcessingObject*, qint64)));
-
-	d_data->transform = computeTransform();
-	computeParams();
 	emitImageTransformChanged();
 	emitProcessingChanged();
 	return obj;
@@ -4369,9 +4383,14 @@ QString VipProcessingList::overrideName() const
 void VipProcessingList::setSourceProperty(const char* name, const QVariant& value)
 {
 	VipProcessingObject::setSourceProperty(name, value);
-	QMutexLocker lock(&d_data->mutex);
-	for (int i = 0; i < d_data->objects.size(); ++i)
-		d_data->objects[i]->setProperty(name, value);
+
+	QList<VipProcessingObject*> objects;
+	{
+		QMutexLocker lock(&d_data->mutex);
+		objects = d_data->objects;
+	}
+	for (int i = 0; i < objects.size(); ++i)
+		objects[i]->setProperty(name, value);
 }
 
 // static void safeLock(QMutex * mutex)

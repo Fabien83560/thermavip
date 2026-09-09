@@ -15,6 +15,7 @@
 #include "VipXmlArchive.h"
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <QElapsedTimer>
 #include <QThread>
@@ -111,6 +112,33 @@ protected:
 		QThread::msleep(400);
 		outputAt(0)->setData(create(inputAt(0)->data().data()));
 	}
+};
+
+/// Reports when the list propagates its source properties to it. The hook is
+/// the shortest reimplemented virtual the list calls while it inserts.
+class WatchingProcessing : public VipProcessingObject
+{
+	Q_OBJECT
+	VIP_IO(VipInput input)
+	VIP_IO(VipOutput output)
+
+public:
+	std::function<void()> onSourceProperty;
+
+	WatchingProcessing(QObject* parent = nullptr)
+	  : VipProcessingObject(parent)
+	{
+	}
+
+	void setSourceProperty(const char* name, const QVariant& value) override
+	{
+		if (onSourceProperty)
+			onSourceProperty();
+		VipProcessingObject::setSourceProperty(name, value);
+	}
+
+protected:
+	void apply() override { outputAt(0)->setData(create(inputAt(0)->data().data())); }
 };
 
 /// Carries a multi input, so the container operations can be exercised.
@@ -994,6 +1022,13 @@ private Q_SLOTS:
 		});
 		reader->start();
 
+		// The writer below is short: without this the reader could still be
+		// starting when it ends, and the count asserted at the end would be zero.
+		QElapsedTimer started;
+		started.start();
+		while (reads.load() == 0 && started.elapsed() < 30000)
+			QThread::msleep(1);
+
 		for (int i = 0; i < 200; ++i) {
 			VipProcessingManager::setLogErrorEnabled(VipProcessingObject::RuntimeError, i % 2 == 0);
 			VipProcessingManager::setMaxListMemory(40000000 + i);
@@ -1130,6 +1165,37 @@ private Q_SLOTS:
 
 		QCOMPARE(proc.applyCount.load(), 2);
 		QCOMPARE(proc.outputAt(0)->data().value<double>(), 6.0);
+	}
+
+	/// Inserting a processing propagated the source properties of the list while
+	/// holding the mutex of the list. That propagation is a virtual reimplemented
+	/// outside the library, plugins included, and every other thread that only
+	/// wanted the size of the list waited behind it.
+	void insertingDoesNotHoldTheMutexWhileItCallsTheProcessing()
+	{
+		VipProcessingList list;
+		list.setSourceProperty("test_property", QVariant(1));
+
+		WatchingProcessing* proc = new WatchingProcessing();
+		bool readInTime = false;
+		QThread* reader = nullptr;
+		proc->onSourceProperty = [&]() {
+			if (reader)
+				return;
+			reader = QThread::create([&]() { list.size(); });
+			reader->start();
+			// Answered here, while the insert is still on the stack: joined after
+			// it returns, the read always gets through in the end.
+			readInTime = reader->wait(1000);
+		};
+
+		QVERIFY(list.insert(0, proc));
+
+		QVERIFY(reader);
+		QVERIFY(reader->wait(30000));
+		delete reader;
+
+		QVERIFY2(readInTime, "the list must be readable while it configures a processing");
 	}
 };
 
