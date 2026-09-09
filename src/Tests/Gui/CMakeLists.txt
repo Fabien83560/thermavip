@@ -1,2 +1,3 @@
 add_subdirectory(DragWidget)
 add_subdirectory(FileSystem)
+add_subdirectory(StandardWidgets)

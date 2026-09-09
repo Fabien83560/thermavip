@@ -662,21 +662,26 @@ VipNDDoubleCoordinate VipMultiComponentDoubleEdit::readValue(bool* ok) const
 	QStringList lst = str.split(" ", VIP_SKIP_BEHAVIOR::SkipEmptyParts);
 	for (int i = 0; i < lst.size(); ++i) {
 		bool is_ok = false;
-		VipDoubleEdit::readValue(lst[i], d_data->integer, &is_ok);
+		// The parsed component was dropped, so the coordinate stayed empty: the
+		// widget reported itself invalid whatever was typed, stayed marked in the
+		// error style, never displayed a value it was given, and never returned one
+		// that was entered.
+		const double component = VipDoubleEdit::readValue(lst[i], d_data->integer, &is_ok);
 		if (!is_ok) {
 			if (ok)
 				*ok = false;
 			return value;
 		}
+		value.push_back(component);
 	}
 
 	if (ok)
 		*ok = true;
-	if (d_data->fixedNumberOfComponents >= 0 && value.size() != d_data->fixedNumberOfComponents) {
+	if (d_data->fixedNumberOfComponents >= 0 && static_cast<int>(value.size()) != d_data->fixedNumberOfComponents) {
 		if (ok)
 			*ok = false;
 	}
-	if (d_data->maxNumberOfComponents >= 0 && value.size() > d_data->maxNumberOfComponents) {
+	if (d_data->maxNumberOfComponents >= 0 && static_cast<int>(value.size()) > d_data->maxNumberOfComponents) {
 		if (ok)
 			*ok = false;
 	}
@@ -773,8 +778,17 @@ bool VipDoubleSliderEdit::showSpinBox() const
 
 void VipDoubleSliderEdit::setupSlider()
 {
-	double range = maximum() - minimum();
-	int steps = range / singleStep();
+	// The spin box accepts the whole range of a double until a bound is set, so
+	// the span is infinite here and the count of steps was converted to an int
+	// from that, which is undefined and gave a maximum below the minimum.
+	const double step = singleStep();
+	if (!(step > 0))
+		return;
+	const double range = maximum() - minimum();
+	if (!std::isfinite(range) || range <= 0)
+		return;
+	const double raw = range / step;
+	const int steps = static_cast<int>(std::min<double>(raw, 1000000.));
 	m_slider->setMinimum(0);
 	m_slider->setMaximum(steps);
 	m_slider->setSingleStep(1);
@@ -2134,11 +2148,17 @@ static QList<Action> findActions(QWidget* bar, QAction* exclude = nullptr)
 				// if (QToolBar* b = qobject_cast<QToolBar*>(w))
 				//  res += findActions(b);
 				//  else
+				// An action listed by a widget can have no associated widget of its
+				// own, which is the state a transfer goes through: this runs on every
+				// action removed.
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-				res.append(Action(a, w, a->associatedWidgets()[0]));
+				const QList<QWidget*> assoc = a->associatedWidgets();
 #else
-				res.append(Action(a, w, qobject_cast<QWidget*>(a->associatedObjects()[0])));
+				const QObjectList assoc = a->associatedObjects();
 #endif
+				if (assoc.isEmpty())
+					continue;
+				res.append(Action(a, w, qobject_cast<QWidget*>(assoc.first())));
 			}
 		}
 		else {
@@ -2147,6 +2167,8 @@ static QList<Action> findActions(QWidget* bar, QAction* exclude = nullptr)
 #else
 			QList<QWidget*> ws = vipListCast<QWidget*>(acts[i]->associatedObjects());
 #endif
+			if (ws.isEmpty())
+				continue;
 			if (ws.size() > 1)
 				res.append(Action(acts[i], ws[1], ws[0]));
 			else
