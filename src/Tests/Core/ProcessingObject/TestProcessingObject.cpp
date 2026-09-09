@@ -642,6 +642,46 @@ private Q_SLOTS:
 		}
 		QVERIFY2(observed.isNull(), "destroying the list must destroy the processings it owns");
 	}
+
+	/// The indexed accessors cast their argument to size_t and indexed a vector
+	/// with it, so a negative index addressed far past the end. They now hold
+	/// the contract of the accessors by name: out of range gives nullptr.
+	void indexedAccessorsRejectAnIndexOutOfRange()
+	{
+		MultiplyByProperty processing;
+
+		QVERIFY(processing.inputAt(0));
+		QVERIFY2(!processing.inputAt(-1), "a negative index must not be cast into a huge one");
+		QVERIFY(!processing.inputAt(processing.inputCount()));
+		QVERIFY(!processing.outputAt(-1));
+		QVERIFY(!processing.outputAt(processing.outputCount()));
+		QVERIFY(!processing.propertyAt(-1));
+		QVERIFY(!processing.propertyAt(processing.propertyCount()));
+		QVERIFY(!processing.topLevelInputAt(-1));
+		QVERIFY(!processing.topLevelInputAt(processing.topLevelInputCount()));
+		QVERIFY(!processing.topLevelOutputAt(processing.topLevelOutputCount()));
+		QVERIFY(!processing.topLevelPropertyAt(processing.topLevelPropertyCount()));
+	}
+
+	/// Same for the list, whose position argument is public input: inserting
+	/// past the end of a QList is undefined, and at()/take() indexed on trust.
+	void processingListBoundsItsPositions()
+	{
+		VipProcessingList list;
+		AddOne* first = new AddOne();
+		QVERIFY(list.append(first));
+
+		AddOne* late = new AddOne();
+		QVERIFY2(list.insert(50, late), "a position past the end is clamped, not rejected");
+		QCOMPARE(list.size(), 2);
+		QCOMPARE(list.at(1), late);
+
+		QVERIFY(!list.at(-1));
+		QVERIFY(!list.at(list.size()));
+		QVERIFY(!list.take(-1));
+		QVERIFY(!list.take(list.size()));
+		QCOMPARE(list.size(), 2);
+	}
 };
 
 VIP_TEST_MAIN(TestProcessingObject)

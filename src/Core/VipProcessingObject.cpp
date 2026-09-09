@@ -2606,19 +2606,28 @@ int VipProcessingObject::topLevelPropertyCount() const
 VipProcessingIO* VipProcessingObject::topLevelInputAt(int i) const
 {
 	initialize();
-	return d_data->inputs[i].get();
+	// Out of range gives nullptr, the contract the accessors by name already hold.
+	// The index came straight from the caller and a negative one, once cast to
+	// size_t, addresses far past the end.
+	if (i < 0 || static_cast<size_t>(i) >= d_data->inputs.size())
+		return nullptr;
+	return d_data->inputs[static_cast<size_t>(i)].get();
 }
 
 VipProcessingIO* VipProcessingObject::topLevelOutputAt(int i) const
 {
 	initialize();
-	return d_data->outputs[i].get();
+	if (i < 0 || static_cast<size_t>(i) >= d_data->outputs.size())
+		return nullptr;
+	return d_data->outputs[static_cast<size_t>(i)].get();
 }
 
 VipProcessingIO* VipProcessingObject::topLevelPropertyAt(int i) const
 {
 	initialize();
-	return d_data->properties[i].get();
+	if (i < 0 || static_cast<size_t>(i) >= d_data->properties.size())
+		return nullptr;
+	return d_data->properties[static_cast<size_t>(i)].get();
 }
 
 VipProcessingIO* VipProcessingObject::topLevelInputName(const QString& name) const
@@ -2669,18 +2678,24 @@ VipProperty* VipProcessingObject::propertyName(const QString& property) const
 VipInput* VipProcessingObject::inputAt(int index) const
 {
 	initialize();
+	if (index < 0 || static_cast<size_t>(index) >= d_data->flatInputs.size())
+		return nullptr;
 	return d_data->flatInputs[static_cast<size_t>(index)];
 }
 
 VipOutput* VipProcessingObject::outputAt(int index) const
 {
 	initialize();
+	if (index < 0 || static_cast<size_t>(index) >= d_data->flatOutputs.size())
+		return nullptr;
 	return d_data->flatOutputs[static_cast<size_t>(index)];
 }
 
 VipProperty* VipProcessingObject::propertyAt(int index) const
 {
 	initialize();
+	if (index < 0 || static_cast<size_t>(index) >= d_data->flatProperties.size())
+		return nullptr;
 	return d_data->flatProperties[static_cast<size_t>(index)];
 }
 
@@ -3912,6 +3927,9 @@ bool VipProcessingList::insert(int index, VipProcessingObject* obj)
 {
 	QMutexLocker lock(&d_data->mutex);
 
+	// The position is public input: QList::insert past the end is undefined.
+	index = qBound(0, index, static_cast<int>(d_data->objects.size()));
+
 	if (d_data->objects.indexOf(obj) < 0) {
 		// make sur the object has at least on input and one output
 		if (obj->inputCount() == 0 && obj->topLevelInputCount() && obj->topLevelInputAt(0)->toMultiInput())
@@ -3964,6 +3982,8 @@ int VipProcessingList::indexOf(VipProcessingObject* obj) const
 VipProcessingObject* VipProcessingList::at(int i) const
 {
 	QMutexLocker lock(&d_data->mutex);
+	if (i < 0 || i >= d_data->objects.size())
+		return nullptr;
 	return const_cast<VipProcessingObject*>(d_data->objects[i]);
 }
 
@@ -3971,6 +3991,8 @@ VipProcessingObject* VipProcessingList::take(int i)
 {
 	QMutexLocker lock(&d_data->mutex);
 
+	if (i < 0 || i >= d_data->objects.size())
+		return nullptr;
 	VipProcessingObject* obj = d_data->objects[i];
 	d_data->objects.removeOne(obj);
 	obj->d_data->parentList = nullptr;
@@ -4116,7 +4138,8 @@ void VipProcessingList::applyFrom(VipProcessingObject* obj)
 			d_data->objects[0]->update(true);
 
 			if (d_data->objects[0]->hasError()) {
-				this->setError(d_data->objects[0]->lastErrors().last());
+				if (d_data->objects[0]->lastErrors().size())
+					this->setError(d_data->objects[0]->lastErrors().last());
 			}
 			else {
 				VipAnyData tmp = d_data->objects[0]->outputAt(0)->data();
@@ -4237,7 +4260,9 @@ VipSceneModelBasedProcessing::VipSceneModelBasedProcessing(QObject* parent)
   : VipProcessingObject(parent)
 {
 	VIP_CREATE_PRIVATE_DATA();
-	this->topLevelPropertyAt(1)->toMultiProperty()->resize(1);
+	if (VipProcessingIO* io = this->topLevelPropertyName("shape_ids"))
+		if (VipMultiProperty* mp = io->toMultiProperty())
+			mp->resize(1);
 }
 
 VipSceneModelBasedProcessing::~VipSceneModelBasedProcessing()
@@ -4458,7 +4483,10 @@ void VipSceneModelBasedProcessing::setSceneModel(const VipSceneModel& scene, con
 {
 	this->propertyAt(0)->setData(VipAnyData(QVariant::fromValue(VipLazySceneModel(scene)), VipInvalidTime));
 	if (!identifier.isEmpty()) {
-		this->propertyAt(1)->setData(identifier);
+		// By name, like the reader: the size of the shape_ids multi-property is
+		// not fixed by the class.
+		if (VipProperty* ids_prop = this->propertyName("shape_ids"))
+			ids_prop->setData(identifier);
 	}
 	d_data->rawScene = scene;
 	d_data->lazyScene = VipLazySceneModel(scene);
@@ -4478,7 +4506,8 @@ void VipSceneModelBasedProcessing::setSceneModel(const VipSceneModel& scene, con
 void VipSceneModelBasedProcessing::setSceneModel(const VipSceneModel& scene, const QStringList& identifiers)
 {
 	this->propertyAt(0)->setData(VipAnyData(QVariant::fromValue(VipLazySceneModel(scene)), VipInvalidTime));
-	this->propertyAt(1)->setData(VipAnyData(QVariant::fromValue(identifiers), VipInvalidTime));
+	if (VipProperty* ids_prop = this->propertyName("shape_ids"))
+		ids_prop->setData(VipAnyData(QVariant::fromValue(identifiers), VipInvalidTime));
 
 	d_data->rawScene = scene;
 	d_data->lazyScene = VipLazySceneModel(scene);
