@@ -16,6 +16,8 @@
 #include "VipResize.h"
 #include "VipNDArrayStatistics.h"
 #include "VipStack.h"
+#include "VipConvolve.h"
+#include "VipEval.h"
 
 #include <vector>
 
@@ -126,6 +128,42 @@ private Q_SLOTS:
 
 		// And the buffer belongs to the caller: it is still readable here.
 		QCOMPARE(owned[0], 3.5);
+	}
+
+	/// The convolution kept its two coordinate buffers inside the functor, and
+	/// the evaluation calls that functor from several threads at once: each one
+	/// resized and wrote the same two objects and read what its neighbours had
+	/// written. Nothing crashed, the numbers were simply wrong. Only the generic
+	/// path uses those buffers, which is the one a shape of four dimensions takes,
+	/// and the parallel loop only starts above a few thousand elements.
+	void convolvingOnSeveralThreadsGivesWhatOneThreadGives()
+	{
+		VipNDArrayType<double> source(vipVector(8, 8, 8, 16));
+		for (qsizetype i = 0; i < source.size(); ++i)
+			source[i] = static_cast<double>(i % 17);
+
+		VipNDArrayType<double> kernel(vipVector(3, 3, 3, 3));
+		for (qsizetype i = 0; i < kernel.size(); ++i)
+			kernel[i] = static_cast<double>(i % 5) + 1.;
+
+		const int previous = vipIterateThreadCount();
+
+		vipSetIterateThreadCount(1);
+		VipNDArrayType<double> alone(source.shape());
+		QVERIFY(vipEval(alone, vipConvolve<Vip::Nearest>(source, kernel)));
+
+		vipSetIterateThreadCount(8);
+		VipNDArrayType<double> together(source.shape());
+		QVERIFY(vipEval(together, vipConvolve<Vip::Nearest>(source, kernel)));
+
+		vipSetIterateThreadCount(previous);
+
+		qsizetype different = 0;
+		for (qsizetype i = 0; i < alone.size(); ++i)
+			if (together[i] != alone[i])
+				++different;
+
+		QCOMPARE(different, (qsizetype)0);
 	}
 
 	/// The axis of a stack comes from the caller and is used as an index into a
