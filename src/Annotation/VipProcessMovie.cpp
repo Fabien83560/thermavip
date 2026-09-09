@@ -1062,16 +1062,28 @@ void VipPlayerDBAccess::changeValue(const QString& name, const QString& value, c
 
 void VipPlayerDBAccess::mergeIds(const QList<qint64>& ids)
 {
-	if (!ids.size())
+	if (ids.size() < 2) {
+		VIP_LOG_ERROR("At least two events are needed to merge");
 		return;
+	}
+
+	// The identifiers come from a free text field, and the non const lookup used
+	// to insert an empty entry for an unknown one before taking its first shape.
+	for (qint64 id : ids) {
+		auto found = m_events.constFind(id);
+		if (found == m_events.constEnd() || found.value().isEmpty()) {
+			VIP_LOG_ERROR("Unknown event identifier: " + QString::number(id));
+			return;
+		}
+	}
 
 	// check merge validity
-	QString category = m_events[ids.first()].first().group();
+	QString category = m_events.value(ids.first()).first().group();
 	QVector<VipTimeRange> ranges;
 	qsizetype count = 0;
 	for (qsizetype k = 0; k < ids.size(); ++k) {
 		qint64 id = ids[k];
-		const VipShapeList shs = m_events[id];
+		const VipShapeList shs = m_events.value(id);
 		count += shs.size();
 		if (shs.size()) {
 			QString cat = shs.first().group();
@@ -1425,6 +1437,12 @@ Vip_event_list VipPlayerDBAccess::applyActions(const Vip_event_list& events)
 						--s;
 					}
 				}
+				// The rest of the module assumes an identifier that is present has
+				// at least one shape, and every reader takes the first one. Removing
+				// a range covering the whole event used to leave the key behind with
+				// nothing under it.
+				if (shs.isEmpty())
+					res.remove(id);
 			}
 		}
 		else if (act.type == Action::InterpolateFrames) {
@@ -1439,8 +1457,20 @@ Vip_event_list VipPlayerDBAccess::applyActions(const Vip_event_list& events)
 					polygons[shs[s].attribute("timestamp_ns").toLongLong()] = shs[s];
 				}
 
-				// get the source IR device
-				VipIODevice* dev = vipListCast<VipIODevice*>(m_player->mainDisplayObject()->allSources()).first();
+				// get the source IR device. The main display object is null on the base
+				// implementation, and the list of sources is empty when the pipeline
+				// carries no device: every other caller of this accessor tests it.
+				VipDisplayObject* main_display = m_player ? m_player->mainDisplayObject() : nullptr;
+				if (!main_display) {
+					VIP_LOG_ERROR("No main display object, interpolation abandoned");
+					return res;
+				}
+				const QList<VipIODevice*> sources = vipListCast<VipIODevice*>(main_display->allSources());
+				if (sources.isEmpty()) {
+					VIP_LOG_ERROR("No source device, interpolation abandoned");
+					return res;
+				}
+				VipIODevice* dev = sources.first();
 
 				// get time before and after
 				qint64 start_t = dev->previousTime(range.first);
@@ -1468,7 +1498,11 @@ Vip_event_list VipPlayerDBAccess::applyActions(const Vip_event_list& events)
 				else if (range.second >= polygons.lastKey())
 					end = polygons.last().polygon();
 				else {
-					QMap<qint64, VipShape>::iterator it = polygons.upperBound(range.second + 1);
+					// Without the increment, and with a fallback: for a bound one unit
+					// below the last key, the search used to land past the end.
+					QMap<qint64, VipShape>::iterator it = polygons.upperBound(range.second);
+					if (it == polygons.end())
+						--it;
 					end = it.value().polygon();
 				}
 
@@ -1739,7 +1773,16 @@ void VipPlayerDBAccess::saveToJsonInternal(bool show_messages)
 			p.setText("Recompute temporal statistics for modified events...");
 
 			// recompute stats
+			// The extraction returns an empty list when it refuses the request, which
+			// it does for a colour image or without a pool, and the loop below indexed
+			// it without looking.
 			QList<VipProcessingObject*> stats = m_player->extractTimeEvolution(to_recompute, Vip::Min | Vip::Max | Vip::Mean, 1, 2);
+			if (stats.size() != 3 * to_recomputeIds.size()) {
+				VIP_LOG_WARNING("Temporal statistics unavailable, attributes not recomputed");
+				to_recompute.clear();
+				to_recomputeIds.clear();
+				stats.clear();
+			}
 			qsizetype c = 0;
 			for (qsizetype i = 0; i < to_recomputeIds.size(); ++i) {
 				VipAnyResource* max = static_cast<VipAnyResource*>(stats[c++]);
@@ -1916,8 +1959,17 @@ void VipPlayerDBAccess::uploadInternal(bool show_messages)
 				p.setText("Recompute temporal statistics for modified events...");
 
 				// recompute stats
+				// The extraction returns an empty list when it refuses the request, which
+				// it does for a colour image or without a pool, and the loop below indexed
+				// it without looking.
 				QList<VipProcessingObject*> stats =
 				  m_player->extractTimeEvolution(to_recompute, Vip::Min | Vip::Max | Vip::Mean, 1, 2);
+				if (stats.size() != 3 * to_recomputeIds.size()) {
+					VIP_LOG_WARNING("Temporal statistics unavailable, attributes not recomputed");
+					to_recompute.clear();
+					to_recomputeIds.clear();
+					stats.clear();
+				}
 				qsizetype c = 0;
 				for (qsizetype i = 0; i < to_recomputeIds.size(); ++i) {
 					VipAnyResource* max = static_cast<VipAnyResource*>(stats[c++]);
