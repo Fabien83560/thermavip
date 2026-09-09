@@ -8,7 +8,7 @@ import sys
 
 import numpy as np
 
-SRC = r"E:\audit_claude\thermavip_updated\src\Python\estim_tau.py"
+SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'Python', 'estim_tau.py')
 spec = importlib.util.spec_from_file_location('estim_tau', SRC)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)

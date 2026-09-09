@@ -9,7 +9,7 @@ import types
 
 import numpy as np
 
-ROOT = r"E:\audit_claude\thermavip_updated\src\Python"
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'Python')
 failures = []
 
 
