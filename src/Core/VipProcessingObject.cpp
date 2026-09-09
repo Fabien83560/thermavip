@@ -1057,18 +1057,27 @@ int VipOutput::bufferDataSize()
 
 VipAnyData VipOutput::data() const
 {
+	VipUniqueLock<VipSpinlock> lock(const_cast<VipSpinlock&>(m_data_lock));
 	return *d_data;
 }
 
 void VipOutput::setData(const VipAnyData& d)
 {
-	*d_data = d;
+	{
+		VipUniqueLock<VipSpinlock> lock(m_data_lock);
+		*d_data = d;
+	}
 	if (isEnabled()) {
+		// The datum sent is the one received, not a re-read of the shared member:
+		// another thread setting this output between the two used to make this call
+		// send its datum instead of ours. Sending happens outside the lock, since it
+		// reaches arbitrary code downstream.
+		VipAnyData sent = d;
 		if (VipProcessingObject* obj = parentProcessing())
-			obj->setOutputDataTime(*d_data);
-		connection()->sendData(*d_data);
+			obj->setOutputDataTime(sent);
+		connection()->sendData(sent);
 		if (m_custom_sender)
-			m_custom_sender(*d_data);
+			m_custom_sender(sent);
 		if (m_bufferize_outputs) {
 			VipUniqueLock<VipSpinlock> lock(m_buffer_lock);
 			m_buffer.push_back(d);
@@ -4334,27 +4343,26 @@ void VipProcessingList::setSourceProperty(const char* name, const QVariant& valu
 
 QList<VipProcessingObject*> VipProcessingList::directSources() const
 {
-	// TODO: to improve
-	// QList<VipProcessingObject*> res;
-	// if (d_data->mutex.tryLock()) {
-	// const_cast<VipProcessingList*>(this)->computeParams();
-	// res = d_data->directSources;
-	// res.detach();
-	// d_data->mutex.unlock();
-	// }
-	// else
-	// res = d_data->directSources;
-	// return res;
-
 	QList<VipProcessingObject*> res = VipProcessingObject::directSources();
-	// safeLock(&d_data->mutex);
-	for (int i = 0; i < d_data->objects.size(); ++i) {
-		const QList<VipProcessingObject*> tmp = d_data->objects[i]->directSources();
+
+	// A snapshot taken under the lock, then walked without it. Every other method
+	// of this class holds the mutex over this container; this one walked it while
+	// another thread inserted or removed. The lock is not held during the calls
+	// below, which reach other processings and would invite an inversion.
+	QList<VipProcessingObject*> objects;
+	{
+		QMutexLocker lock(&d_data->mutex);
+		objects = d_data->objects;
+	}
+
+	for (int i = 0; i < objects.size(); ++i) {
+		if (!objects[i])
+			continue;
+		const QList<VipProcessingObject*> tmp = objects[i]->directSources();
 		for (QList<VipProcessingObject*>::const_iterator it = tmp.begin(); it != tmp.end(); ++it)
 			if (res.indexOf(*it) < 0 && *it != this)
 				res += *it;
 	}
-	// d_data->mutex.unlock();
 	return res;
 }
 
@@ -4381,9 +4389,8 @@ void VipProcessingList::applyFrom(VipProcessingObject* obj)
 {
 	qint64 st = vipGetNanoSecondsSinceEpoch();
 
-	QMutexLocker lock(&d_data->mutex);
-
-	// Exchanged, not tested then set: the flag is read from the thread of a child
+	// The flag, not the mutex, is what keeps two pipelines from overlapping.
+	// Exchanged, not tested then set: it is read from the thread of a child
 	// processing and written from the thread applying the list, and a plain read
 	// could see it false just after another thread had set it.
 	bool expected = false;
@@ -4397,24 +4404,43 @@ void VipProcessingList::applyFrom(VipProcessingObject* obj)
 		~ClearApplying() { flag.store(false); }
 	} clear_applying{ d_data->isApplying };
 
-	computeParams();
+	// The mutex is taken to read the container and the parameters, and released
+	// before the pipeline runs. It used to be held for the whole run, and a
+	// processing that pumps the event loop then blocked every other thread that
+	// only wanted to look at the list: that is why the locking of directSources()
+	// had been commented out rather than fixed.
+	QList<VipProcessingObject*> objects;
+	QString overrideName;
+	qint64 lastTime;
+	QTransform previousTransform;
+	{
+		QMutexLocker lock(&d_data->mutex);
+		computeParams();
+		objects = d_data->objects;
+		overrideName = d_data->overrideName;
+		lastTime = d_data->lastTime;
+		previousTransform = d_data->transform;
+	}
 
-	if (!d_data->objects.size()) {
+	if (!objects.size()) {
 		VipAnyData data = inputAt(0)->data();
 		VipAnyData out = create(data.data(), data.attributes());
-		d_data->lastTime = data.time();
+		{
+			QMutexLocker lock(&d_data->mutex);
+			d_data->lastTime = data.time();
+		}
 		out.setTime(data.time());
-		if (!d_data->overrideName.isEmpty())
-			out.setName(d_data->overrideName);
+		if (!overrideName.isEmpty())
+			out.setName(overrideName);
 		outputAt(0)->setData(out);
 		return;
 	}
 
 	int index = -1;
 	if (obj) {
-		index = d_data->objects.indexOf(obj);
+		index = objects.indexOf(obj);
 		// find an enabled processing
-		while (index >= 0 && !d_data->objects[index]->isEnabled())
+		while (index >= 0 && !objects[index]->isEnabled())
 			--index;
 	}
 
@@ -4425,49 +4451,51 @@ void VipProcessingList::applyFrom(VipProcessingObject* obj)
 	VipAnyData data;
 	if (index < 0) {
 		data = inputAt(0)->data();
-		if (d_data->objects[0]->isEnabled()) {
-			d_data->objects[0]->inputAt(0)->setData(data);
-			d_data->objects[0]->update(true);
+		if (objects[0]->isEnabled()) {
+			objects[0]->inputAt(0)->setData(data);
+			objects[0]->update(true);
 
-			if (d_data->objects[0]->hasError()) {
-				if (d_data->objects[0]->lastErrors().size())
-					this->setError(d_data->objects[0]->lastErrors().last());
+			if (objects[0]->hasError()) {
+				if (objects[0]->lastErrors().size())
+					this->setError(objects[0]->lastErrors().last());
 			}
 			else {
-				VipAnyData tmp = d_data->objects[0]->outputAt(0)->data();
+				VipAnyData tmp = objects[0]->outputAt(0)->data();
 				data.mergeAttributes(tmp.attributes());
 				data.setData(tmp.data());
 			}
 		}
-		d_data->lastTime = data.time();
+		lastTime = data.time();
+		QMutexLocker lock(&d_data->mutex);
+		d_data->lastTime = lastTime;
 	}
 	else {
-		VipAnyData tmp = d_data->objects[index]->outputAt(0)->data();
+		VipAnyData tmp = objects[index]->outputAt(0)->data();
 		data.mergeAttributes(tmp.attributes());
 		data.setData(tmp.data());
-		data.setTime(d_data->lastTime);
+		data.setTime(lastTime);
 	}
 
 	index = qMax(index, 0);
 
-	const VipNDArray src_ar = d_data->objects.size() ? d_data->objects.first()->inputAt(0)->probe().value<VipNDArray>() : VipNDArray();
+	const VipNDArray src_ar = objects.size() ? objects.first()->inputAt(0)->probe().value<VipNDArray>() : VipNDArray();
 
 	bool need_compute_transform = !src_ar.isEmpty() && src_ar.shapeCount() == 2;
 
-	if (!d_data->objects[index]->hasError()) {
-		for (int i = index + 1; i < d_data->objects.size(); ++i) {
-			if (!d_data->objects[i]->isEnabled())
+	if (!objects[index]->hasError()) {
+		for (int i = index + 1; i < objects.size(); ++i) {
+			if (!objects[i]->isEnabled())
 				continue;
-			d_data->objects[i]->inputAt(0)->setData(data);
-			d_data->objects[i]->update(true);
+			objects[i]->inputAt(0)->setData(data);
+			objects[i]->update(true);
 
-			if (d_data->objects[i]->hasError()) {
-				if (d_data->objects[i]->lastErrors().size())
-					this->setError(d_data->objects[i]->lastErrors().last());
+			if (objects[i]->hasError()) {
+				if (objects[i]->lastErrors().size())
+					this->setError(objects[i]->lastErrors().last());
 				break;
 			}
 
-			VipAnyData tmp = d_data->objects[i]->outputAt(0)->data();
+			VipAnyData tmp = objects[i]->outputAt(0)->data();
 			data.mergeAttributes(tmp.attributes());
 			data.setData(tmp.data());
 		}
@@ -4476,6 +4504,7 @@ void VipProcessingList::applyFrom(VipProcessingObject* obj)
 	QTransform tr;
 	if (need_compute_transform) {
 		// compute the list image transform
+		QMutexLocker lock(&d_data->mutex);
 		tr = computeTransform();
 	}
 
@@ -4485,15 +4514,17 @@ void VipProcessingList::applyFrom(VipProcessingObject* obj)
 	// vip_debug("1 %s name: %s\n",objectName().toLatin1().data(), attribute("Name").toString().toLatin1().data());
 	VipAnyData out = create(data.data(), data.attributes());
 	out.setTime(data.time());
-	if (!d_data->overrideName.isEmpty())
-		out.setName(d_data->overrideName);
+	if (!overrideName.isEmpty())
+		out.setName(overrideName);
 	// vip_debug("2 %s name: %s\n", objectName().toLatin1().data(), out.name().toLatin1().data());
 
 	outputAt(0)->setData(out);
 
-
-	if (tr != d_data->transform) {
-		d_data->transform = tr;
+	if (tr != previousTransform) {
+		{
+			QMutexLocker lock(&d_data->mutex);
+			d_data->transform = tr;
+		}
 		emitImageTransformChanged();
 	}
 

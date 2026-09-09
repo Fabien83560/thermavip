@@ -963,6 +963,37 @@ private Q_SLOTS:
 		VipProcessingManager::setMaxListMemory(initialMemory);
 		QCOMPARE(VipProcessingManager::maxListMemory(), initialMemory);
 	}
+
+	/// The list ran its whole pipeline holding the mutex that guards its
+	/// container, so anything else that only wanted to look at the list waited
+	/// behind every processing. Looking at it from inside a processing of that
+	/// same list is the shortest way to show the mutex is no longer held: the
+	/// mutex nests, but only for the thread that owns it, and this is the thread
+	/// that runs the pipeline.
+	void theListDoesNotHoldItsMutexWhileRunning()
+	{
+		VipProcessingList list;
+		AddOne* first = new AddOne();
+		QVERIFY(list.append(first));
+
+		bool sourcesRead = false;
+		QObject::connect(first,
+				 &VipProcessingObject::processingDone,
+				 &list,
+				 [&](VipProcessingObject*, qint64) {
+					 // Reads the container under the mutex.
+					 list.directSources();
+					 sourcesRead = true;
+				 },
+				 Qt::DirectConnection);
+
+		list.inputAt(0)->setData(VipAnyData(QVariant(1.0), 0));
+		QVERIFY(list.update(true));
+		list.wait();
+
+		QVERIFY2(sourcesRead, "the container must be readable while the pipeline runs");
+		QCOMPARE(list.outputAt(0)->data().value<double>(), 2.0);
+	}
 };
 
 VIP_TEST_MAIN(TestProcessingObject)

@@ -1145,6 +1145,9 @@ class VIP_CORE_EXPORT VipOutput : public UniqueProcessingIO
 	QSharedPointer<VipAnyData> d_data;
 	VipAnyDataList m_buffer;
 	VipSpinlock m_buffer_lock;
+	// The current data itself, which the buffer lock never covered: the sibling
+	// property class holds the same pattern under its own lock.
+	VipSpinlock m_data_lock;
 	std::function<void(const VipAnyData&)> m_custom_sender; // Send the data to m_custom_sender function in addition of the regular connection
 	bool m_bufferize_outputs;
 
