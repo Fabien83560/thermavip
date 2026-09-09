@@ -51,6 +51,36 @@ private Q_SLOTS:
 
 		QVERIFY(options.positional().contains(QStringLiteral("-")));
 	}
+
+	/// A short option consuming a value must take it out of the argument stream,
+	/// which is what the long form does. It used to read the value and leave it in
+	/// place, so the next turn of the loop saw it again as an argument of its own.
+	void shortOptionConsumesItsValue()
+	{
+		VipCommandOptions& options = VipCommandOptions::instance();
+		options.setFlagStyle(VipCommandOptions::DoubleDash);
+		options.add("output", QString(), VipCommandOptions::ValueRequired);
+		options.alias("output", "o");
+
+		options.parse(QStringList() << "app" << "-o" << "result.txt" << "keep");
+
+		QCOMPARE(options.value("output").toString(), QString("result.txt"));
+		QVERIFY2(!options.positional().contains(QStringLiteral("result.txt")), "the value must not show up as a positional argument");
+		QVERIFY(options.positional().contains(QStringLiteral("keep")));
+	}
+
+	/// The long form, for comparison: it already behaved this way.
+	void longOptionConsumesItsValue()
+	{
+		VipCommandOptions& options = VipCommandOptions::instance();
+		options.setFlagStyle(VipCommandOptions::DoubleDash);
+		options.add("target", QString(), VipCommandOptions::ValueRequired);
+
+		options.parse(QStringList() << "app" << "--target" << "result.txt" << "keep");
+
+		QCOMPARE(options.value("target").toString(), QString("result.txt"));
+		QVERIFY(!options.positional().contains(QStringLiteral("result.txt")));
+	}
 };
 
 VIP_TEST_MAIN(TestCommandOptions)

@@ -483,6 +483,10 @@ void CommandOptionsPrivate::parse(const QStringList& params)
 									break;
 								}
 								value = params[pos];
+								// The long form consumes the value it takes; this one read it
+								// and left it in place, so the next turn of the loop saw it
+								// again as an argument of its own.
+								pos++;
 							}
 							else {
 								value = "";
