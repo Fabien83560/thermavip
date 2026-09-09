@@ -41,6 +41,16 @@
 
 namespace detail
 {
+	// An array owns its buffer and can detach it; a view does not.
+	template<class T, class = void>
+	struct HasDetach : std::false_type
+	{
+	};
+	template<class T>
+	struct HasDetach<T, std::void_t<decltype(std::declval<T&>().detach())>> : std::true_type
+	{
+	};
+
 	// Tells if a compile error should be triggered
 	template<bool Err>
 	struct CError
@@ -174,6 +184,12 @@ namespace detail
 
 			using dtype = ValueType_t<Dst>;
 			const qsizetype size = dst.size();
+			// Detach before writing: the const accessor does not, on purpose, and
+			// this function is public. Called directly, it used to write into a
+			// buffer another array still shares. A view owns nothing and has no
+			// detach, which is the whole point of a view.
+			if constexpr (detail::HasDetach<Dst>::value)
+				dst.detach();
 			dtype* ptr = (dtype*)dst.constPtr();
 			if (!ptr)
 				return false;

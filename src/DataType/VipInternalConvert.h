@@ -346,9 +346,21 @@ namespace detail
 	struct Convert
 	{
 		static const bool valid = std::is_convertible_v<S, D>;
-		static D apply(const S& src) 
-		{ 
-			if constexpr (valid)
+		static D apply(const S& src)
+		{
+			if constexpr (std::is_integral_v<D> && std::is_floating_point_v<S>) {
+				// Converting a floating point value outside the range of the
+				// destination is undefined, and wraps in practice: a value above the
+				// maximum came out at the other end of the scale. This is the
+				// conversion the whole library goes through.
+				const double v = static_cast<double>(src);
+				if (!(v > static_cast<double>(std::numeric_limits<D>::lowest())))
+					return std::numeric_limits<D>::lowest();
+				if (!(v < static_cast<double>(std::numeric_limits<D>::max())))
+					return std::numeric_limits<D>::max();
+				return static_cast<D>(v);
+			}
+			else if constexpr (valid)
 				return static_cast<D>(src);
 			else
 				return D();

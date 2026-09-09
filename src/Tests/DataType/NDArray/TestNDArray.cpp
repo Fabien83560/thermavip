@@ -11,6 +11,8 @@
 #include "VipNDArray.h"
 #include "VipMultiNDArray.h"
 #include "VipNDRect.h"
+#include "VipNDArrayOperations.h"
+#include "VipResize.h"
 #include "VipNDArrayStatistics.h"
 #include "VipStack.h"
 
@@ -269,6 +271,65 @@ private Q_SLOTS:
 		QCOMPARE(coord[1], (qsizetype)7);
 		QCOMPARE(coord[2], (qsizetype)0);
 		QCOMPARE(coord[3], (qsizetype)0);
+	}
+
+	/// Writing into an array goes through a const accessor that does not detach,
+	/// and the evaluation is public: called directly, it used to write into a
+	/// buffer another array still shares.
+	void evaluatingIntoASharedArrayDetachesIt()
+	{
+		VipNDArrayType<double> source(vipVector(4));
+		for (int i = 0; i < 4; ++i)
+			source(vipVector(i)) = i;
+
+		const VipNDArray shared(source); // shares the handle, and never detaches
+
+		VipNDArrayType<double> other(vipVector(4));
+		for (int i = 0; i < 4; ++i)
+			other(vipVector(i)) = 100 + i;
+
+		QVERIFY(vipEval(source, other));
+
+		for (int i = 0; i < 4; ++i) {
+			QCOMPARE(source(vipVector(i)), (double)(100 + i));
+			QVERIFY2(shared.value(vipVector(i)).toDouble() == (double)i, "the array sharing the buffer must not have changed");
+		}
+	}
+
+	/// The central conversion is a bare cast: a value outside the range of an
+	/// integer destination is undefined there, and wraps in practice, so a bright
+	/// pixel came out dark.
+	void convertingOutOfRangeSaturates()
+	{
+		VipNDArrayType<double> source(vipVector(4));
+		source(vipVector(0)) = -1000;
+		source(vipVector(1)) = 0;
+		source(vipVector(2)) = 300;
+		source(vipVector(3)) = 1e30;
+
+		VipNDArrayType<unsigned char> dst(vipVector(4));
+		QVERIFY(vipEval(dst, vipCast<unsigned char>(source)));
+
+		QCOMPARE((int)dst(vipVector(0)), 0);
+		QCOMPARE((int)dst(vipVector(1)), 0);
+		QCOMPARE((int)dst(vipVector(2)), 255);
+		QCOMPARE((int)dst(vipVector(3)), 255);
+	}
+
+	/// A shape longer than the storage of the fixed size vector used to be copied
+	/// in whole, past the member array.
+	void aShapeLongerThanTheStorageIsClamped()
+	{
+		QVector<qsizetype> many;
+		for (int i = 0; i < 32; ++i)
+			many << i;
+
+		VipNDArrayShape shape(many);
+		QVERIFY(shape.size() <= VIP_MAX_DIMS);
+
+		VipNDArrayShape resized;
+		resized.resize(64);
+		QVERIFY(resized.size() <= VIP_MAX_DIMS);
 	}
 };
 
