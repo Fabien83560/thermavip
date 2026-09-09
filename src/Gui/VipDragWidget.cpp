@@ -1978,8 +1978,10 @@ namespace
 	};
 }
 
-static VipMultiDragWidget::reparent_function _reparent_function;
-static std::function<void(VipMultiDragWidget*)> _on_multi_drag_widget_created;
+// Not a leading underscore at namespace scope: those names are reserved to the
+// implementation.
+static VipMultiDragWidget::reparent_function reparentHook;
+static std::function<void(VipMultiDragWidget*)> multiDragWidgetCreatedHook;
 
 VipMultiDragWidget::VipMultiDragWidget(QWidget* parent)
   : VipBaseDragWidget(parent)
@@ -2032,8 +2034,10 @@ VipMultiDragWidget::VipMultiDragWidget(QWidget* parent)
 
 	connect(d_data->v_splitter, SIGNAL(splitterMoved(int, int)), this, SLOT(receivedSplitterMoved(int, int)));
 
-	if (_on_multi_drag_widget_created)
-		_on_multi_drag_widget_created(this);
+	// Called from the base constructor: a derived class is not built yet when it
+	// runs, which is what this hook has always promised its one registrant.
+	if (multiDragWidgetCreatedHook)
+		multiDragWidgetCreatedHook(this);
 }
 
 VipMultiDragWidget::~VipMultiDragWidget()
@@ -2055,16 +2059,16 @@ VipMultiDragWidget::~VipMultiDragWidget()
 
 void VipMultiDragWidget::setReparentFunction(reparent_function fun)
 {
-	_reparent_function = fun;
+	reparentHook = fun;
 }
 VipMultiDragWidget::reparent_function VipMultiDragWidget::reparentFunction()
 {
-	return _reparent_function;
+	return reparentHook;
 }
 
 void VipMultiDragWidget::onCreated(const std::function<void(VipMultiDragWidget*)>& fun)
 {
-	_on_multi_drag_widget_created = fun;
+	multiDragWidgetCreatedHook = fun;
 }
 
 Qt::Orientation VipMultiDragWidget::orientation() const
@@ -3087,8 +3091,8 @@ VipMultiDragWidget* VipMultiDragWidget::create(QWidget* parent) const
 
 bool VipMultiDragWidget::supportReparent(QWidget* new_parent)
 {
-	if (_reparent_function)
-		return _reparent_function(this, new_parent);
+	if (reparentHook)
+		return reparentHook(this, new_parent);
 	return true;
 }
 

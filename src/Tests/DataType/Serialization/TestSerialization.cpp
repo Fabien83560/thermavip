@@ -528,6 +528,24 @@ private Q_SLOTS:
 		vipSleep(30);
 		QVERIFY2(timer.elapsed() >= 10, "an ordinary duration must still wait");
 	}
+
+	/// A point vector is a circular buffer: its data() is private and points at
+	/// the control structure it shares between copies, not at the samples. The
+	/// public interface is the way to read and write one element at a time, which
+	/// is what a device serialising it must use.
+	void aPointVectorIsReadThroughItsInterface()
+	{
+		VipPointVector vec(3);
+		for (qsizetype i = 0; i < vec.size(); ++i)
+			vec[i] = VipPoint(i, i * 2.);
+
+		const VipPointVector& readable = vec;
+		for (qsizetype i = 0; i < readable.size(); ++i) {
+			const VipPoint pt = readable[i];
+			QCOMPARE(pt.x(), (double)i);
+			QCOMPARE(pt.y(), i * 2.);
+		}
+	}
 };
 
 VIP_TEST_MAIN(TestSerialization)

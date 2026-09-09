@@ -122,11 +122,11 @@ VipLogging::VipLogging()
 	VIP_CREATE_PRIVATE_DATA();
 }
 
-VipLogging::VipLogging(Outputs outputs, VipFileLogger* logger)
+VipLogging::VipLogging(Outputs outputs, std::unique_ptr<VipFileLogger> logger)
   : QThread()
 {
 	VIP_CREATE_PRIVATE_DATA();
-	open(outputs, logger);
+	open(outputs, std::move(logger));
 }
 
 VipLogging::VipLogging(Outputs outputs, const QString& identifier)
@@ -225,13 +225,13 @@ bool VipLogging::isEnabled() const
 
 bool VipLogging::open(Outputs outputs, const QString& identifier)
 {
-	VipFileLogger* logger = nullptr;
+	std::unique_ptr<VipFileLogger> logger;
 	if (!identifier.isEmpty() && (outputs & File))
-		logger = new VipTextLogger(identifier, "./");
-	return open(outputs, logger);
+		logger.reset(new VipTextLogger(identifier, "./"));
+	return open(outputs, std::move(logger));
 }
 
-bool VipLogging::open(Outputs outputs, VipFileLogger* logger)
+bool VipLogging::open(Outputs outputs, std::unique_ptr<VipFileLogger> logger)
 {
 	close();
 
@@ -258,7 +258,7 @@ bool VipLogging::open(Outputs outputs, VipFileLogger* logger)
 	}
 
 	if (outputs & File) {
-		d_data->file = QSharedPointer<VipFileLogger>(logger);
+		d_data->file = QSharedPointer<VipFileLogger>(logger.release());
 	}
 
 	d_data->stop = false;

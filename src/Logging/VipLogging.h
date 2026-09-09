@@ -124,7 +124,8 @@ public:
 	Q_DECLARE_FLAGS(Levels, Level);
 
 	VipLogging();
-	VipLogging(Outputs outputs, VipFileLogger* logger);
+	/// Takes ownership of \p logger, which must come from new.
+	VipLogging(Outputs outputs, std::unique_ptr<VipFileLogger> logger);
 	VipLogging(Outputs outputs, const QString& identifier = QString());
 	~VipLogging();
 
@@ -155,7 +156,10 @@ public:
 	/// Set the log identifier.
 	/// This will close any previously opened shared memory.
 	/// Returns true on success, false otherwise.
-	bool open(Outputs outputs, VipFileLogger* logger);
+	/// Takes ownership of \p logger, which must come from new: it is held in a
+	/// shared pointer and destroyed with this object. The type says so, so the
+	/// caller cannot keep a second owner by mistake.
+	bool open(Outputs outputs, std::unique_ptr<VipFileLogger> logger);
 	bool open(Outputs outputs, const QString& identifier = QString());
 	bool isOpen() const;
 	void close();

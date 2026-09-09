@@ -70,7 +70,15 @@ bool RAWSignalReader::open(VipIODevice::OpenModes mode)
 	// read file content
 	qint64 samples = d->size() / sizeof(VipPoint);
 	VipPointVector vec(samples);
-	d->read((char*)vec.data(), vec.size() * sizeof(VipPoint));
+	// Point by point, through the public interface: the vector is a circular
+	// buffer whose data() is private and returns the control structure it shares
+	// between copies, not the samples.
+	for (qsizetype i = 0; i < vec.size(); ++i) {
+		VipPoint pt;
+		if (d->read(reinterpret_cast<char*>(&pt), sizeof(pt)) != (qint64)sizeof(pt))
+			return false;
+		vec[i] = pt;
+	}
 
 	// set output data
 	outputAt(0)->setData(create(QVariant::fromValue(vec)));
@@ -121,8 +129,12 @@ void RAWSignalWriter::apply()
 	// get input data
 	VipAnyData any = inputAt(0)->data();
 	const VipPointVector v = any.value<VipPointVector>();
-	// write to file
-	device()->write((char*)v.data(), v.size() * sizeof(VipPoint));
+	// write to file, point by point for the same reason as the reader
+	for (qsizetype i = 0; i < v.size(); ++i) {
+		const VipPoint pt = v[i];
+		if (device()->write(reinterpret_cast<const char*>(&pt), sizeof(pt)) != (qint64)sizeof(pt))
+			return;
+	}
 }
 
 

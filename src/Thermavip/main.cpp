@@ -438,7 +438,8 @@ int main(int argc, char** argv)
 	QString log_file = "Log";
 	if (VipCoreSettings::instance()->logFileDate())
 		log_file += "_" + QDateTime::currentDateTime().toString("yyyy.MM.dd-hh.mm.ss");
-	VipLogging::instance().open(VipLogging::Cout | VipLogging::File, new VipTextLogger(log_file, vipGetLogDirectory(), VipCoreSettings::instance()->logFileOverwrite()));
+	VipLogging::instance().open(VipLogging::Cout | VipLogging::File,
+				    std::unique_ptr<VipFileLogger>(new VipTextLogger(log_file, vipGetLogDirectory(), VipCoreSettings::instance()->logFileOverwrite())));
 	VipLogging::instance().setSavingEnabled(true);
 
 	bool last_session = false;
