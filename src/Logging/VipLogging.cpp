@@ -64,14 +64,12 @@ class VipLogging::PrivateData
 {
 public:
 	PrivateData()
-	  : semaphore("Log", 1)
-	  , stop(true)
+	  : stop(true)
 	  , enable_saving(false)
 	  , enabled(true)
 	{
 	}
 	QList<LogFrame> logs;
-	QSystemSemaphore semaphore;
 	QSharedMemory memory;
 	QMutex mutex;
 	QSharedPointer<VipFileLogger> file;
@@ -242,7 +240,6 @@ bool VipLogging::open(Outputs outputs, VipFileLogger* logger)
 		identifier = logger->identifier();
 
 	QMutexLocker lock(&d_data->mutex);
-	d_data->semaphore.setKey(identifier, 1);
 	d_data->outputs = outputs;
 
 	if (d_data->memory.isAttached())
@@ -347,11 +344,13 @@ void VipLogging::directLog(const LogFrame& frame)
 		std::cout.flush();
 	}
 	if ((out & File) && d_data->file) {
-		// if(d_data->semaphore.acquire())
-		{
-			d_data->file->addLogEntry(frame.text, frame.level, frame.date);
-			// d_data->semaphore.release();
-		}
+		// No cross process exclusion here: two instances writing to the same file
+		// interleave their entries. The semaphore that was meant to prevent it was
+		// built and keyed on every open but both of its uses were commented out, so
+		// it protected nothing while still costing a system object. Restoring it
+		// means acquiring it outside the mutex below, which is a change to the
+		// locking order and belongs with the concurrency work.
+		d_data->file->addLogEntry(frame.text, frame.level, frame.date);
 	}
 	if (out & SharedMemory) {
 		if (log.isEmpty())
@@ -481,9 +480,18 @@ QString VipTextLogger::canonicalFilePath() const
 
 void VipTextLogger::addLogEntry(const QString& text, VipLogging::Level level, const QDateTime& date)
 {
-	QByteArray log = VipLogging::formatLogEntry(text, level, date);
-	if (d_file.open(QFile::WriteOnly | QFile::Text | QFile::Append)) {
-		d_file.write(log);
-		d_file.close();
+	// Nothing here was checked: a failed open dropped the entry without a word, a
+	// short write truncated it, and the close that flushes it hid any deferred
+	// error. A missing line in a log is read as the event not having happened. A
+	// logger cannot log its own failure, so it says so on the error stream.
+	const QByteArray log = VipLogging::formatLogEntry(text, level, date);
+	if (!d_file.open(QFile::WriteOnly | QFile::Text | QFile::Append)) {
+		std::cerr << "VipLogging: cannot open " << qPrintable(d_file.fileName()) << std::endl;
+		return;
 	}
+	const qint64 written = d_file.write(log);
+	const bool flushed = d_file.flush();
+	d_file.close();
+	if (written != log.size() || !flushed || d_file.error() != QFile::NoError)
+		std::cerr << "VipLogging: incomplete write to " << qPrintable(d_file.fileName()) << std::endl;
 }
