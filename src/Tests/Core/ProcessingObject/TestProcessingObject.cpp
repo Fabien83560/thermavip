@@ -1101,6 +1101,36 @@ private Q_SLOTS:
 		QVERIFY2(elapsed >= 200, qPrintable(QString("the second update returned after %1 ms").arg(elapsed)));
 		QVERIFY2(processor * 4 < elapsed, qPrintable(QString("%1 ms of processor time for %2 ms of update").arg(processor).arg(elapsed)));
 	}
+
+	/// A run that finds no new input asks the pool to drop what is scheduled.
+	/// Asked for from a thread that is not the one of the pool, the request
+	/// simply stayed armed, and the pool then threw away the first batch it woke
+	/// up for: real work, pushed after the skip, silently lost.
+	void skippingForLackOfInputDoesNotLoseTheNextTask()
+	{
+		MultiplyByProperty proc;
+		proc.setComputeTimeStatistics(false);
+
+		// Asynchronous first, so the pool exists and runs one real input.
+		proc.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::SkipIfNoInput | VipProcessingObject::Asynchronous);
+		proc.inputAt(0)->setData(makeData(1.0));
+		QVERIFY(proc.wait(true, 30000));
+		QCOMPARE(proc.applyCount.load(), 1);
+
+		// A forced run in the calling thread, with nothing new on the input: this
+		// is the skip, and the pool is idle at that moment.
+		proc.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::SkipIfNoInput | VipProcessingObject::NoThread);
+		QVERIFY(proc.update(true));
+		QCOMPARE(proc.applyCount.load(), 1);
+
+		// Back to the pool, with real input.
+		proc.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::SkipIfNoInput | VipProcessingObject::Asynchronous);
+		proc.inputAt(0)->setData(makeData(3.0));
+		QVERIFY(proc.wait(true, 30000));
+
+		QCOMPARE(proc.applyCount.load(), 2);
+		QCOMPARE(proc.outputAt(0)->data().value<double>(), 6.0);
+	}
 };
 
 VIP_TEST_MAIN(TestProcessingObject)

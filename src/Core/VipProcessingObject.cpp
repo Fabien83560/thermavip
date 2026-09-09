@@ -2055,7 +2055,8 @@ class TaskPool
 	LockType lock;
 
 	std::atomic<int> m_run;
-	std::atomic<bool> m_clear{ false };
+	// How many scheduled tasks the pool has been asked to drop.
+	std::atomic<int> m_clear{ 0 };
 	VipProcessingObject* m_parent;
 	Thread m_thread;
 	// Atomic: written by the destructor, read in the loop of the pool thread. A
@@ -2113,13 +2114,19 @@ void TaskPool::run()
 		}
 
 		int count = m_run.load(std::memory_order_relaxed);
-		int saved = count;
+		const int saved = count;
+		// The tasks to drop are those that were scheduled when the request came
+		// in, never what has been pushed since.
+		count -= qMin(count, m_clear.exchange(0));
 		if (!m_stop) {
 			// Released for the whole execution. This mutex guards the counters and
 			// the condition, nothing else; holding it here made every waitForDone()
 			// wait for the processing to end instead of for the queue to empty.
 			ll.unlock();
-			while (!m_stop && count-- && !m_clear.load(std::memory_order_relaxed)) {
+			while (!m_stop && count-- > 0) {
+				// A request that arrives while the batch runs drops the rest of it.
+				if (m_clear.exchange(0))
+					break;
 				try {
 					// Avoid exiting task pool thread on unhandled exception.
 					// The lock is taken per call rather than around the loop, so
@@ -2146,12 +2153,10 @@ void TaskPool::run()
 			}
 			ll.lock();
 		}
-		if (VIP_UNLIKELY(m_clear.load(std::memory_order_relaxed))) {
-			m_run.store(0);
-			m_clear.store(false);
-		}
-		else
-			m_run.fetch_sub(saved);
+		// Only the batch counted at the start is consumed, whether it ran to the
+		// end or was dropped. Resetting the counter to zero also threw away
+		// everything another thread had pushed while the batch ran.
+		m_run.fetch_sub(saved);
 
 		lock.notify_all();
 	}
@@ -2225,10 +2230,10 @@ int TaskPool::remaining() const
 
 void TaskPool::clear()
 {
-	// Unconditionally: the test and the action were two separate atomics, so a
-	// task pushed between them survived the clear, and a clear asked for while the
-	// queue happened to be empty was simply lost.
-	m_clear.store(true);
+	// What is scheduled right now, and only that. A flag was armed instead, which
+	// dropped whatever batch it happened to land on: a task pushed between the
+	// request and the batch was lost with it.
+	m_clear.store(m_run.load(std::memory_order_relaxed));
 }
 
 class VipProcessingObject::PrivateData
