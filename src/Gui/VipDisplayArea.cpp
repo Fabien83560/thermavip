@@ -1100,8 +1100,10 @@ public:
 	QAction* fit_to_grip;
 	QAction* histo_scale;
 
-	QToolBar* leftTabWidget;
-	QToolBar* rightTabWidget;
+	// Held by a QPointer: setTabButton hands the widget over to the tab bar, which
+	// destroys it on its own, and the setters below used to delete it a second time.
+	QPointer<QToolBar> leftTabWidget;
+	QPointer<QToolBar> rightTabWidget;
 
 	QPointer<VipProgressWidget> progressWidget;
 	QMutex closeMutex;
@@ -1883,8 +1885,8 @@ QToolBar* VipDisplayPlayerArea::takeLeftTabWidget()
 void VipDisplayPlayerArea::setLeftTabWidget(QToolBar* w)
 {
 	if (w != d_data->leftTabWidget)
-		if (d_data->leftTabWidget)
-			delete d_data->leftTabWidget;
+		if (QToolBar* old = d_data->leftTabWidget)
+			old->deleteLater();
 	d_data->leftTabWidget = w;
 	if (w) {
 		if (VipDisplayTabWidget* d = this->parentTabWidget()) {
@@ -1919,8 +1921,8 @@ QToolBar* VipDisplayPlayerArea::takeRightTabWidget()
 void VipDisplayPlayerArea::setRightTabWidget(QToolBar* w)
 {
 	if (w != d_data->rightTabWidget)
-		if (d_data->rightTabWidget)
-			delete d_data->rightTabWidget;
+		if (QToolBar* old = d_data->rightTabWidget)
+			old->deleteLater();
 	d_data->rightTabWidget = w;
 	if (w) {
 		if (VipDisplayTabWidget* d = this->parentTabWidget()) {
@@ -2057,9 +2059,12 @@ void VipDisplayPlayerArea::setFloating(bool pin)
 						rightTabWidget()->setParent(nullptr);
 						rightTabWidget()->show();
 
-						// hide float and close buttons
-						actionForWidget(rightTabWidget(), rightTabWidget()->findChild<QToolButton*>("float_workspace"))->setVisible(false);
-						actionForWidget(rightTabWidget(), rightTabWidget()->findChild<QToolButton*>("close_workspace"))->setVisible(false);
+						// hide float and close buttons. The lookup returns nothing as soon
+						// as the bar has been rebuilt without them.
+						if (QAction* a = actionForWidget(rightTabWidget(), rightTabWidget()->findChild<QToolButton*>("float_workspace")))
+							a->setVisible(false);
+						if (QAction* a = actionForWidget(rightTabWidget(), rightTabWidget()->findChild<QToolButton*>("close_workspace")))
+							a->setVisible(false);
 						rightTabWidget()->setMinimumSize(rightTabWidget()->sizeHint());
 					}
 
@@ -2092,8 +2097,12 @@ void VipDisplayPlayerArea::setFloating(bool pin)
 				if (index >= 0) {
 
 					// show again float and close buttons
-					actionForWidget(rightTabWidget(), rightTabWidget()->findChild<QToolButton*>("float_workspace"))->setVisible(true);
-					actionForWidget(rightTabWidget(), rightTabWidget()->findChild<QToolButton*>("close_workspace"))->setVisible(true);
+					if (QToolBar* bar = rightTabWidget()) {
+						if (QAction* a = actionForWidget(bar, bar->findChild<QToolButton*>("float_workspace")))
+							a->setVisible(true);
+						if (QAction* a = actionForWidget(bar, bar->findChild<QToolButton*>("close_workspace")))
+							a->setVisible(true);
+					}
 
 					setLeftTabWidget(d_data->leftTabWidget);
 					setRightTabWidget(d_data->rightTabWidget);
@@ -3303,15 +3312,31 @@ class UpdateThread : public QThread
 {
 public:
 	VipMainWindow* mainWindow;
-	VipUpdate* update;
+	// Initialised here, not only in run(): the destruction below happens whether
+	// run() was reached or not.
+	VipUpdate* update = nullptr;
 	UpdateThread(VipMainWindow* win)
 	  : mainWindow(win)
 	{
 	}
+	~UpdateThread()
+	{
+		// The download owns a process. Stop it before taking its owner away.
+		if (update) {
+			if (QProcess* p = update->process())
+				if (p->state() != QProcess::NotRunning) {
+					p->kill();
+					p->waitForFinished(1000);
+				}
+			delete update;
+			update = nullptr;
+		}
+	}
 
 	virtual void run()
 	{
-		update = new VipUpdate();
+		if (!update)
+			update = new VipUpdate();
 		connect(update, SIGNAL(updateProgressed(int)), mainWindow->iconBar()->updateProgress, SLOT(setValue(int)));
 		while (VipMainWindow* w = mainWindow) {
 
@@ -3583,6 +3608,10 @@ static bool _has_quit = false;
 VipMainWindow::~VipMainWindow()
 {
 	_has_quit = true;
+	// The accessor keeps the instance in a static and never cleared it, so every
+	// call after the window closed returned a destroyed object; the flag below was
+	// the workaround.
+	vipForgetMainWindow(this);
 
 	Q_EMIT aboutToClose();
 
@@ -5619,9 +5648,21 @@ void VipMainWindow::stopUpdateThread()
 	}
 }
 
-VipMainWindow* vipGetMainWindow()
+static VipMainWindow*& mainWindowInstance()
 {
 	static VipMainWindow* win = nullptr;
+	return win;
+}
+
+void vipForgetMainWindow(VipMainWindow* win)
+{
+	if (mainWindowInstance() == win)
+		mainWindowInstance() = nullptr;
+}
+
+VipMainWindow* vipGetMainWindow()
+{
+	VipMainWindow*& win = mainWindowInstance();
 	if (!win) {
 		win = new VipMainWindow();
 		// init() function cannot be called from within the constructor, so just call it after
@@ -5833,8 +5874,11 @@ static VipBaseDragWidget* dropPlotItem(VipPlotMimeData* mime, QWidget* drop_widg
 				res = new VipDragWidget();
 				static_cast<VipDragWidget*>(res)->setWidget(_new);
 
+				// Nothing is the ordinary outcome here: dropping into an empty area
+				// hands the widget over and returns nothing.
 				res = drop_mime_data_widget(VipDisplayPlayerArea::fromChild(drop_widget), res, drop_widget);
-				res->setFocusWidget();
+				if (res)
+					res->setFocusWidget();
 
 				return res;
 			}
@@ -5853,8 +5897,9 @@ static VipBaseDragWidget* dropPlotItem(VipPlotMimeData* mime, QWidget* drop_widg
 		QList<VipAbstractPlayer*> players = duplicate.players();
 		if (players.size()) {
 			auto* tmp = vipCreateFromWidgets(vipListCast<QWidget*>(players));
-			drop_mime_data_widget(VipDisplayPlayerArea::fromChild(drop_widget), tmp, drop_widget);
-			tmp->setFocusWidget();
+			tmp = drop_mime_data_widget(VipDisplayPlayerArea::fromChild(drop_widget), tmp, drop_widget);
+			if (tmp)
+				tmp->setFocusWidget();
 			return nullptr;
 		}
 	}
