@@ -765,6 +765,48 @@ private Q_SLOTS:
 
 		QVERIFY(!processing.openInputConnections());
 	}
+
+	/// The priority map used to be streamed through a reinterpret_cast onto a map
+	/// of int, which is undefined and let any value from the stream reach
+	/// QThread::setPriority. The wire format is unchanged.
+	void aThreadPriorityOutsideTheEnumerationIsRefused()
+	{
+		QByteArray buffer;
+		{
+			QDataStream str(&buffer, QIODevice::WriteOnly);
+			str << (quint32)2 << QString("known") << (qint32)QThread::HighPriority << QString("forged") << (qint32)987654;
+		}
+
+		PriorityMap map;
+		{
+			QDataStream str(&buffer, QIODevice::ReadOnly);
+			str >> map;
+		}
+
+		QCOMPARE(map.size(), 2);
+		QCOMPARE(map.value("known"), QThread::HighPriority);
+		QCOMPARE(map.value("forged"), QThread::InheritPriority);
+	}
+
+	/// And a map written by the current code reads back identically.
+	void thePriorityMapSurvivesARoundTrip()
+	{
+		PriorityMap written;
+		written.insert("first", QThread::LowestPriority);
+		written.insert("second", QThread::TimeCriticalPriority);
+
+		QByteArray buffer;
+		{
+			QDataStream str(&buffer, QIODevice::WriteOnly);
+			str << written;
+		}
+		PriorityMap read;
+		{
+			QDataStream str(&buffer, QIODevice::ReadOnly);
+			str >> read;
+		}
+		QCOMPARE(read, written);
+	}
 };
 
 VIP_TEST_MAIN(TestProcessingObject)

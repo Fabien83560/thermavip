@@ -267,6 +267,11 @@ class VipProcessingObject;
 typedef QMap<QString, QThread::Priority> PriorityMap;
 Q_DECLARE_METATYPE(PriorityMap)
 
+/// Serialise the priorities as key and value. Any value outside QThread::Priority
+/// falls back to QThread::InheritPriority.
+VIP_CORE_EXPORT QDataStream& operator<<(QDataStream& str, const PriorityMap& map);
+VIP_CORE_EXPORT QDataStream& operator>>(QDataStream& str, PriorityMap& map);
+
 /// VipProcessingManager manages the default configuration of all new VipDataList instances and VipProcessingObject instances.
 /// When a VipDataList is created, its data limit type, max list size and max memory size are set respectively to
 /// VipProcessingManager::listLimitType(), VipProcessingManager::maxListSize() and VipProcessingManager::maxListMemory().

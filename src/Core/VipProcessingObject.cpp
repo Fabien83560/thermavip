@@ -51,14 +51,51 @@
 #include "VipUniqueId.h"
 #include "VipXmlArchive.h"
 
-inline QDataStream& operator<<(QDataStream& str, const PriorityMap& map)
+namespace
 {
-	const QMap<QString, int>& m = reinterpret_cast<const QMap<QString, int>&>(map);
-	return str << m;
+	// The value read is passed to QThread::setPriority, so anything outside the
+	// enumeration is refused rather than converted.
+	QThread::Priority toThreadPriority(qint32 value)
+	{
+		switch (value) {
+			case QThread::IdlePriority:
+			case QThread::LowestPriority:
+			case QThread::LowPriority:
+			case QThread::NormalPriority:
+			case QThread::HighPriority:
+			case QThread::HighestPriority:
+			case QThread::TimeCriticalPriority:
+			case QThread::InheritPriority:
+				return static_cast<QThread::Priority>(value);
+			default:
+				return QThread::InheritPriority;
+		}
+	}
 }
-inline QDataStream& operator>>(QDataStream& str, PriorityMap& map)
+
+// The two maps used to be aliased through a reinterpret_cast, which is undefined
+// between distinct class types and wrote arbitrary stream values into an enum.
+QDataStream& operator<<(QDataStream& str, const PriorityMap& map)
 {
-	return str >> reinterpret_cast<QMap<QString, int>&>(map);
+	str << static_cast<quint32>(map.size());
+	for (PriorityMap::const_iterator it = map.begin(); it != map.end(); ++it)
+		str << it.key() << static_cast<qint32>(it.value());
+	return str;
+}
+QDataStream& operator>>(QDataStream& str, PriorityMap& map)
+{
+	map.clear();
+	quint32 count = 0;
+	str >> count;
+	for (quint32 i = 0; i < count; ++i) {
+		QString name;
+		qint32 priority = QThread::InheritPriority;
+		str >> name >> priority;
+		if (str.status() != QDataStream::Ok)
+			break;
+		map.insert(name, toThreadPriority(priority));
+	}
+	return str;
 }
 
 QStringList VipAnyData::mergeAttributes(const QVariantMap& attrs)
@@ -5087,12 +5124,14 @@ void serialize_VipDataListManager(VipArchive& arch)
 			bool has_error = arch.hasError();
 			arch.resetError();
 
-			if (!VipProcessingManager::instance().d_data->_lock_list_manager) {
+			// A truncated archive gives five default values, and applying four of
+			// them anyway reset the whole process to a zero list limit and an
+			// empty priority map.
+			if (!has_error && !VipProcessingManager::instance().d_data->_lock_list_manager) {
 				VipProcessingManager::setListLimitType(limit_type);
 				VipProcessingManager::setMaxListSize(max_list_size);
 				VipProcessingManager::setMaxListMemory(max_memory);
-				if (!has_error)
-					VipProcessingManager::setLogErrors(logErrors);
+				VipProcessingManager::setLogErrors(logErrors);
 				VipProcessingManager::setDefaultPriorities(prio);
 			}
 
