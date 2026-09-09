@@ -291,9 +291,12 @@ namespace details
 	{
 		return str.data();
 	}
-	static inline const char* __build_str(const QString& str)
+	// Returns the buffer holder, not a pointer into a temporary one: the conversion
+	// produces a QByteArray by value, and its buffer was already gone when the
+	// caller received the pointer.
+	static inline QByteArray __build_str(const QString& str)
 	{
-		return str.toLatin1().data();
+		return str.toLatin1();
 	}
 
 	template<int N>

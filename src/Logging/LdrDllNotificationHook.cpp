@@ -197,6 +197,12 @@ BOOL HookLdrDllNotifications(PLDR_DLL_NOTIFICATION_FUNCTION_HOOK hook)
 
 void UnhookLdrDllNotifications()
 {
+	// Nothing installed: the block is a zero initialised static, and unlinking it
+	// writes through a null pointer. Called without a successful Hook, which is
+	// what an ignored failure produces, this used to take the process down.
+	if (!g_hookDllNotificationBlock.Links.Flink || !g_hookDllNotificationBlock.Links.Blink)
+		return;
+
 	PLIST_ENTRY head = g_hookDllNotificationBlock.Links.Blink;
 
 	// Note: The operations below aren't thread-safe and are prone to races.
