@@ -1108,7 +1108,7 @@ bool VipCoreSettings::restore(const QString& file)
 
 static QMap<int, int (*)(int, const QVariant&)> _mem_functions;
 
-int vipGetMemoryFootprint(const QVariant& v)
+qint64 vipGetMemoryFootprint(const QVariant& v)
 {
 	int type = v.userType();
 
@@ -1136,9 +1136,9 @@ int vipGetMemoryFootprint(const QVariant& v)
 		case QMetaType::QChar:
 			return (int)sizeof(QChar);
 		case QMetaType::QString:
-			return (int)(sizeof(QChar) * v.toString().size());
+			return (qint64)sizeof(QChar) * v.toString().size();
 		case QMetaType::QByteArray:
-			return (int)v.toByteArray().size();
+			return (qint64)v.toByteArray().size();
 		case QMetaType::Long:
 			return (int)sizeof(long);
 		case QMetaType::ULong:
@@ -1152,9 +1152,9 @@ int vipGetMemoryFootprint(const QVariant& v)
 		case QMetaType::QTime:
 			return (int)sizeof(QTime);
 		case QMetaType::QPolygon:
-			return (int)(v.value<QPolygon>().size() * sizeof(QPoint));
+			return (qint64)v.value<QPolygon>().size() * (qint64)sizeof(QPoint);
 		case QMetaType::QPolygonF:
-			return (int)(v.value<QPolygonF>().size() * sizeof(QPointF));
+			return (qint64)v.value<QPolygonF>().size() * (qint64)sizeof(QPointF);
 		case QMetaType::QPoint:
 			return (int)sizeof(QPoint);
 		case QMetaType::QPointF:
@@ -1166,14 +1166,14 @@ int vipGetMemoryFootprint(const QVariant& v)
 		case QMetaType::QColor:
 			return (int)sizeof(QColor);
 		case QMetaType::QVariantMap: {
-			int size = 0;
+			qint64 size = 0;
 			const QVariantMap map = v.value<QVariantMap>();
 			for (QVariantMap::const_iterator it = map.begin(); it != map.end(); ++it)
-				size += (int)(vipGetMemoryFootprint(it.value()) + it.key().size() * sizeof(QChar));
+				size += vipGetMemoryFootprint(it.value()) + it.key().size() * (qint64)sizeof(QChar);
 			return size;
 		}
 		case QMetaType::QVariantList: {
-			int size = 0;
+			qint64 size = 0;
 			const QVariantList map = v.value<QVariantList>();
 			for (QVariantList::const_iterator it = map.begin(); it != map.end(); ++it)
 				size += vipGetMemoryFootprint(*it);
@@ -1185,8 +1185,10 @@ int vipGetMemoryFootprint(const QVariant& v)
 
 	// custom types defined by thermavip
 	if (type == qMetaTypeId<VipNDArray>()) {
+		// An array above two gigabytes used to come back negative, which turned the
+		// memory cap of the input buffers off instead of enforcing it.
 		const VipNDArray ar = v.value<VipNDArray>();
-		return (int)(ar.size() * ar.dataSize());
+		return (qint64)ar.size() * (qint64)ar.dataSize();
 	}
 	else if (type == qMetaTypeId<VipRGB>())
 		return (int)sizeof(VipRGB);
@@ -1201,9 +1203,9 @@ int vipGetMemoryFootprint(const QVariant& v)
 	else if (type == qMetaTypeId<VipIntervalSample>())
 		return (int)sizeof(VipIntervalSample);
 	else if (type == qMetaTypeId<VipPointVector>())
-		return (int)(v.value<VipPointVector>().size() * sizeof(VipPoint));
+		return (qint64)v.value<VipPointVector>().size() * (qint64)sizeof(VipPoint);
 	else if (type == qMetaTypeId<VipIntervalSampleVector>())
-		return (int)(v.value<VipIntervalSampleVector>().size() * sizeof(VipIntervalSample));
+		return (qint64)v.value<VipIntervalSampleVector>().size() * (qint64)sizeof(VipIntervalSample);
 
 	QMap<int, int (*)(int, const QVariant&)>::iterator it = _mem_functions.find(type);
 	if (it != _mem_functions.end())

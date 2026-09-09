@@ -537,6 +537,37 @@ private Q_SLOTS:
 		VipProcessingManager::setMaxListMemory(50000000);
 	}
 
+	/// The sum itself was an int, so a footprint above two gigabytes came back
+	/// negative. The copies below share one buffer, so this measures the sum
+	/// without allocating three gigabytes.
+	void aFootprintAboveTwoGigabytesStaysPositive()
+	{
+		VipNDArrayType<double> big(vipVector(2048, 8192)); // 128 MB
+		QVariantList many;
+		for (int i = 0; i < 24; ++i)
+			many.append(QVariant::fromValue(VipNDArray(big)));
+
+		const qint64 footprint = vipGetMemoryFootprint(QVariant(many));
+		QVERIFY2(footprint > Q_INT64_C(2) * 1024 * 1024 * 1024, "the sum must not wrap at two gigabytes");
+	}
+
+	/// And the eviction loop accumulated in an int too, so a negative sum never
+	/// reached the cap and the buffer was never trimmed.
+	void theMemoryCapTrimsTheBufferAboveTwoGigabytes()
+	{
+		VipNDArrayType<double> big(vipVector(2048, 8192)); // 128 MB, one shared buffer
+
+		VipFIFOList list;
+		list.setListLimitType(VipDataList::MemorySize);
+		list.setMaxListMemory(Q_INT64_C(2560) * 1024 * 1024);
+
+		int count = 0;
+		for (int i = 0; i < 24; ++i)
+			count = list.push(VipAnyData(QVariant::fromValue(VipNDArray(big)), i));
+
+		QVERIFY2(count < 24, "the buffer must be trimmed once its footprint passes the cap");
+	}
+
 	/// A footprint larger than an int can hold is reported as it is.
 	void largeDataFootprintIsNotTruncated()
 	{

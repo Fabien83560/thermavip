@@ -1393,9 +1393,12 @@ int VipFIFOList::push(const VipAnyData& data, int* previous)
 				m_list.pop_front();
 		}
 		if (limits & MemorySize) {
-			int i = 0;
-			int size = 0;
-			for (i = (int)m_list.size() - 1; i >= 0; --i) {
+			// The sum overflows before the cap is reached as soon as the buffer
+			// holds more than two gigabytes, and a negative sum never satisfies
+			// the test: nothing was evicted at all.
+			qsizetype i = 0;
+			qint64 size = 0;
+			for (i = (qsizetype)m_list.size() - 1; i >= 0; --i) {
 				size += m_list[i].memoryFootprint();
 				if (size >= maxListMemory())
 					break;
@@ -1422,9 +1425,12 @@ int VipFIFOList::push(VipAnyData&& data, int* previous)
 		}
 		if (limits & MemorySize) {
 
-			int i = 0;
-			int size = 0;
-			for (i = (int)m_list.size() - 1; i >= 0; --i) {
+			// The sum overflows before the cap is reached as soon as the buffer
+			// holds more than two gigabytes, and a negative sum never satisfies
+			// the test: nothing was evicted at all.
+			qsizetype i = 0;
+			qint64 size = 0;
+			for (i = (qsizetype)m_list.size() - 1; i >= 0; --i) {
 				size += m_list[i].memoryFootprint();
 				if (size >= maxListMemory())
 					break;
@@ -1532,7 +1538,7 @@ int VipFIFOList::status() const
 qint64 VipFIFOList::memoryFootprint() const
 {
 	_SHAREDSPINLOCKER();
-	int size = 0;
+	qint64 size = 0;
 	for (size_t i = 0; i < (size_t)m_list.size(); ++i)
 		size += m_list[i].memoryFootprint();
 	return size;
@@ -1563,14 +1569,14 @@ int VipLIFOList::push(const VipAnyData& data, int* previous)
 			m_list.pop_back();
 	}
 	if (listLimitType() & MemorySize) {
-		int i = 0;
-		int size = 0;
-		for (i = 0; i < (int)m_list.size(); ++i) {
+		qsizetype i = 0;
+		qint64 size = 0;
+		for (i = 0; i < (qsizetype)m_list.size(); ++i) {
 			size += m_list[i].memoryFootprint();
 			if (size >= maxListMemory())
 				break;
 		}
-		if (i < static_cast<int>(m_list.size()))
+		if (i < static_cast<qsizetype>(m_list.size()))
 			m_list.erase(m_list.begin() + i + 1, m_list.end());
 		// m_list = m_list.mid(0, i + 1);
 	}
@@ -1591,14 +1597,14 @@ int VipLIFOList::push(VipAnyData&& data, int* previous)
 			m_list.pop_back();
 	}
 	if (listLimitType() & MemorySize) {
-		int i = 0;
-		int size = 0;
-		for (i = 0; i < (int)m_list.size(); ++i) {
+		qsizetype i = 0;
+		qint64 size = 0;
+		for (i = 0; i < (qsizetype)m_list.size(); ++i) {
 			size += m_list[i].memoryFootprint();
 			if (size >= maxListMemory())
 				break;
 		}
-		if (i < static_cast<int>(m_list.size()))
+		if (i < static_cast<qsizetype>(m_list.size()))
 			m_list.erase(m_list.begin() + i + 1, m_list.end());
 		// m_list = m_list.mid(0, i + 1);
 	}
@@ -1695,7 +1701,7 @@ qint64 VipLIFOList::time() const
 qint64 VipLIFOList::memoryFootprint() const
 {
 	_SHAREDSPINLOCKER();
-	int size = 0;
+	qint64 size = 0;
 	for (int i = 0; i < static_cast<int>(m_list.size()); ++i)
 		size += m_list[i].memoryFootprint();
 	return size;
