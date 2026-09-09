@@ -170,7 +170,13 @@ VipConnection::VipConnection()
 
 VipConnection::~VipConnection()
 {
-	clearConnection();
+	// Qualified, and without setOpenMode(): a virtual call here would resolve to
+	// this class, and the signal would reach a half destroyed object. Each
+	// derived class closes what it owns in its own destructor.
+	VipConnection::doClearConnection();
+	d_data->address.clear();
+	d_data->connections.clear();
+	d_data->openMode = UnknownConnection;
 }
 
 VipProcessingIO* VipConnection::parentProcessingIO() const
@@ -284,6 +290,31 @@ void VipConnection::setOpenMode(IOType mode)
 		Q_EMIT connectionClosed(parentProcessingIO());
 }
 
+// The address of the output end of a connection, empty when that end is not
+// attached to a processing object.
+static QString outputConnectionAddress(const VipConnectionPtr& out)
+{
+	if (!out)
+		return QString();
+	VipProcessingObject* processing = out->parentProcessingObject();
+	VipProcessingIO* io = out->parentProcessingIO();
+	if (!processing || !io)
+		return QString();
+	if (VipProcessingPool* pool = processing->parentObjectPool())
+		return "VipConnection:" + pool->objectName() + ";" + processing->objectName() + ";" + io->name();
+	return "VipConnection:" + processing->objectName() + ";" + io->name();
+}
+
+// Name of the processing a connection belongs to, for logging.
+static QString connectionProcessingName(const VipConnection* connection)
+{
+	if (connection)
+		if (VipProcessingIO* io = connection->parentProcessingIO())
+			if (VipProcessingObject* processing = io->parentProcessing())
+				return processing->objectName();
+	return QStringLiteral("<unattached connection>");
+}
+
 QString VipConnection::address() const
 {
 	// recompute the address if needed ( the VipProcessingObject name might have changed in the meantime)
@@ -291,12 +322,9 @@ QString VipConnection::address() const
 		// build connection from given VipConnection instances
 		if (d_data->connections.size()) {
 			// use the last (probably unique) connection which is the output
-			VipConnectionPtr out = d_data->connections.back();
-			if (VipProcessingPool* pool = out->parentProcessingObject()->parentObjectPool())
-				const_cast<QString&>(d_data->address) =
-				  "VipConnection:" + pool->objectName() + ";" + out->parentProcessingObject()->objectName() + ";" + out->parentProcessingIO()->name();
-			else
-				const_cast<QString&>(d_data->address) = "VipConnection:" + out->parentProcessingObject()->objectName() + ";" + out->parentProcessingIO()->name();
+			const QString addr = outputConnectionAddress(d_data->connections.back());
+			if (!addr.isEmpty())
+				const_cast<QString&>(d_data->address) = addr;
 		}
 	}
 	return d_data->address;
@@ -327,8 +355,11 @@ QList<UniqueProcessingIO*> VipConnection::allSinks() const
 
 void VipConnection::receiveData(const VipAnyData& data)
 {
-	parentProcessingIO()->setData(data);
-	Q_EMIT dataReceived(parentProcessingIO(), data);
+	VipProcessingIO* io = parentProcessingIO();
+	if (!io)
+		return;
+	io->setData(data);
+	Q_EMIT dataReceived(io, data);
 }
 
 void VipConnection::removeProcessingPoolFromAddress()
@@ -356,10 +387,9 @@ void VipConnection::doOpenConnection(IOType type)
 				out->d_data->connections.append(in);
 
 			// save processing pool name if possible
-			if (VipProcessingPool* pool = out->parentProcessingObject()->parentObjectPool())
-				d_data->address = "VipConnection:" + pool->objectName() + ";" + out->parentProcessingObject()->objectName() + ";" + out->parentProcessingIO()->name();
-			else
-				d_data->address = "VipConnection:" + out->parentProcessingObject()->objectName() + ";" + out->parentProcessingIO()->name();
+			const QString addr = outputConnectionAddress(out);
+			if (!addr.isEmpty())
+				d_data->address = addr;
 			d_data->connections = VipConnectionVector() << out;
 			this->setOpenMode(InputConnection);
 		}
@@ -367,7 +397,8 @@ void VipConnection::doOpenConnection(IOType type)
 		else if (d_data->address.length()) {
 			QString addr = removeClassNamePrefix(d_data->address);
 			QStringList lst = addr.split(";");
-			QObject* pool = parentProcessingObject()->parentObjectPool();
+			VipProcessingObject* owner = parentProcessingObject();
+			QObject* pool = owner ? owner->parentObjectPool() : nullptr;
 			if (lst.size() == 3) {
 				// When loading a player session, processing objects are first inserted in a temporary pool set as parent,
 				// so use this pool and not the one given in the connection name
@@ -376,9 +407,9 @@ void VipConnection::doOpenConnection(IOType type)
 				lst = lst.mid(1);
 			}
 
-			if (!pool) {
+			if (!pool && owner) {
 				// Use the parent object (like a VipProcessingBlock)
-				pool = parentProcessingObject()->parent();
+				pool = owner->parent();
 			}
 
 			if (pool && lst.size() == 2) {
@@ -392,11 +423,9 @@ void VipConnection::doOpenConnection(IOType type)
 						if (out->d_data->connections.indexOf(in) < 0)
 							out->d_data->connections.append(in);
 
-						if (VipProcessingPool* p = out->parentProcessingObject()->parentObjectPool())
-							d_data->address =
-							  "VipConnection:" + p->objectName() + ";" + out->parentProcessingObject()->objectName() + ";" + out->parentProcessingIO()->name();
-						else
-							d_data->address = "VipConnection:" + out->parentProcessingObject()->objectName() + ";" + out->parentProcessingIO()->name();
+						const QString out_addr = outputConnectionAddress(out);
+						if (!out_addr.isEmpty())
+							d_data->address = out_addr;
 						d_data->connections = VipConnectionVector() << out;
 						this->setOpenMode(InputConnection);
 						return;
@@ -407,8 +436,9 @@ void VipConnection::doOpenConnection(IOType type)
 				}
 			}
 
-			VIP_LOG_ERROR("Wrong connection format for " + this->parentProcessingIO()->parentProcessing()->objectName() + ", address: " + d_data->address);
-			setError("Wrong connection format for " + this->parentProcessingIO()->parentProcessing()->objectName(), VipProcessingObject::ConnectionNotOpen);
+			const QString processing_name = connectionProcessingName(this);
+			VIP_LOG_ERROR("Wrong connection format for " + processing_name + ", address: " + d_data->address);
+			setError("Wrong connection format for " + processing_name, VipProcessingObject::ConnectionNotOpen);
 			this->setOpenMode(UnknownConnection);
 		}
 	}
@@ -428,16 +458,20 @@ void VipConnection::doClearConnection()
 {
 	//VipConnectionPtr con = sharedFromThis();
 	for (int i = 0; i < d_data->connections.size(); ++i) {
-		qsizetype index = indexOfSharedVector(d_data->connections[i]->d_data->connections, this);
+		// Hold the peer: the callback below can drop the last reference to it.
+		VipConnectionPtr peer = d_data->connections[i];
+		qsizetype index = indexOfSharedVector(peer->d_data->connections, this);
 		if (index >= 0) {
 
-			auto* p = d_data->connections[i]->d_data->parent;
+			auto* p = peer->d_data->parent;
 
-			d_data->connections[i]->d_data->connections.remove(index);
-			if (d_data->connections[i]->d_data->connections.isEmpty())
-				p->receiveConnectionClosed(d_data->connections[i]->d_data->io);
+			peer->d_data->connections.remove(index);
+			// The parent is only set by setParentProcessingObject: a connection
+			// that was never attached has none.
+			if (p && peer->d_data->connections.isEmpty())
+				p->receiveConnectionClosed(peer->d_data->io);
 
-			d_data->connections[i]->checkClosedConnections();
+			peer->checkClosedConnections();
 		}
 	}
 
@@ -3084,28 +3118,48 @@ void VipProcessingObject::setupOutputConnections(const QString& address)
 	emitProcessingChanged();
 }
 
-void VipProcessingObject::openInputConnections()
+// Opens one end, reporting what happened instead of dropping it.
+static bool openIOConnection(UniqueProcessingIO* io, VipConnection::IOType type, const QString& processing)
 {
+	if (!io)
+		return false;
+	VipConnectionPtr connection = io->connection();
+	if (!connection) {
+		VIP_LOG_ERROR("No connection for " + processing + "/" + io->name());
+		return false;
+	}
+	if (connection->openConnection(type))
+		return true;
+	VIP_LOG_ERROR("Cannot open connection for " + processing + "/" + io->name() + ", address: " + connection->address());
+	return false;
+}
+
+bool VipProcessingObject::openInputConnections()
+{
+	bool ok = true;
 	for (int i = 0; i < inputCount(); ++i)
-		inputAt(i)->connection()->openConnection(VipConnection::InputConnection);
+		ok = openIOConnection(inputAt(i), VipConnection::InputConnection, objectName()) && ok;
 	for (int i = 0; i < propertyCount(); ++i)
-		propertyAt(i)->connection()->openConnection(VipConnection::InputConnection);
+		ok = openIOConnection(propertyAt(i), VipConnection::InputConnection, objectName()) && ok;
 	emitProcessingChanged();
+	return ok;
 }
 
-void VipProcessingObject::openOutputConnections()
+bool VipProcessingObject::openOutputConnections()
 {
+	bool ok = true;
 	for (int i = 0; i < outputCount(); ++i)
-		outputAt(i)->connection()->openConnection(VipConnection::OutputConnection);
+		ok = openIOConnection(outputAt(i), VipConnection::OutputConnection, objectName()) && ok;
 	emitProcessingChanged();
+	return ok;
 }
 
-void VipProcessingObject::openAllConnections()
+bool VipProcessingObject::openAllConnections()
 {
 	// open the outputs first
-	openOutputConnections();
+	bool ok = openOutputConnections();
 	// then open the inputs/properties
-	openInputConnections();
+	return openInputConnections() && ok;
 }
 
 void VipProcessingObject::removeProcessingPoolFromAddresses()

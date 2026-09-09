@@ -1825,14 +1825,17 @@ public:
 	/// \sa VipConnection::setupConnection.
 	void setupOutputConnections(const QString& address);
 	/// @brief Open all input connections. This function does not need to be called for direct connections.
+	/// Returns false if at least one connection could not be opened.
 	/// \sa VipConnection::openConnection
-	void openInputConnections();
+	bool openInputConnections();
 	/// @brief Open all output connections. This function does not need to be called for direct connections.
+	/// Returns false if at least one connection could not be opened.
 	/// \sa VipConnection::openConnection
-	void openOutputConnections();
+	bool openOutputConnections();
 
 	/// @brief Open all connections. It starts first by the outputs and then the inputs/properties.
-	void openAllConnections();
+	/// Returns false if at least one connection could not be opened.
+	bool openAllConnections();
 
 	/// @brief Call VipConnection::removeProcessingPoolFromAddress() for all inputs/properties
 	void removeProcessingPoolFromAddresses();

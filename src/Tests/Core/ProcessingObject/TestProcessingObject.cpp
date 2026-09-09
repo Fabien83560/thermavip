@@ -708,6 +708,32 @@ private Q_SLOTS:
 		QVERIFY(VipProcessingManager::isLogErrorEnabled(VipProcessingObject::WrongInput));
 		QVERIFY(VipProcessingManager::isLogErrorEnabled(VipProcessingObject::IOError));
 	}
+
+	/// A connection carries a parent processing object only once it has been
+	/// attached to one. Opening a standalone connection walked straight through
+	/// that null parent, and so did the branch meant to report the bad address.
+	void anUnattachedConnectionReportsInsteadOfFaulting()
+	{
+		VipConnectionPtr connection(new VipConnection());
+		connection->setupConnection("VipConnection:no_such_processing;output");
+
+		QVERIFY2(!connection->openConnection(VipConnection::InputConnection), "an address that resolves to nothing must fail to open");
+		QVERIFY(connection->hasError());
+
+		connection->receiveData(VipAnyData(QVariant(1.0), 0));
+	}
+
+	/// Opening the connections of a processing dropped the result for every one
+	/// of them, so a session whose address does not resolve reloaded silently
+	/// incomplete.
+	void openingConnectionsReportsAnAddressThatDoesNotResolve()
+	{
+		MultiplyByProperty processing;
+		processing.setObjectName("consumer");
+		processing.inputAt(0)->setConnection("VipConnection:no_such_processing;output");
+
+		QVERIFY(!processing.openInputConnections());
+	}
 };
 
 VIP_TEST_MAIN(TestProcessingObject)
