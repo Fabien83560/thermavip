@@ -1829,6 +1829,11 @@ public:
 	/// @brief Setup all output connections for this processing. This function does not need to be called for direct connections.
 	/// \sa VipConnection::setupConnection.
 	void setupOutputConnections(const QString& address);
+	/// @brief Returns true once the destructor of this object has started.
+	/// The object stays visible to the global registry until the base destructor
+	/// runs, and must not be used any more from that point.
+	bool isBeingDestroyed() const noexcept;
+
 	/// @brief Open all input connections. This function does not need to be called for direct connections.
 	/// Returns false if at least one connection could not be opened.
 	/// \sa VipConnection::openConnection

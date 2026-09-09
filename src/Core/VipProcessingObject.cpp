@@ -1247,6 +1247,8 @@ void VipProcessingManager::applyAll()
 	for (int i = 0; i < procs.size(); ++i) {
 		// only apply the parameters if they are the default ones
 		VipProcessingObject* proc = procs[i];
+		if (proc->isBeingDestroyed())
+			continue;
 		if (proc->logErrors() == VipProcessingManager::instance().d_data->_log_errors) {
 			proc->setLogErrors(instance().d_data->errors);
 		}
@@ -2318,8 +2320,8 @@ VipProcessingObject::~VipProcessingObject()
 
 	// wait for all remaining processing and delete the task pool
 	if (TaskPool* p = d_data->getPool()) {
-		p->waitForDone();
 		p->clear();
+		p->waitForDone();
 		/* if (p->thread() == this->thread())
 			delete p;
 		else
@@ -3364,6 +3366,10 @@ bool VipProcessingObject::isEnabled() const
 
 bool VipProcessingObject::update(bool force_run)
 {
+	// The task pool outlives the derived parts of the object: nothing may be
+	// submitted once the destructor has started.
+	if (VIP_UNLIKELY(d_data->destruct))
+		return false;
 
 	// Exit if disabled
 	if (VIP_UNLIKELY(!isEnabled()))
@@ -3619,12 +3625,19 @@ void VipProcessingObject::run()
 	SPIN_LOCK(d_data->run_mutex);
 	runNoLock();
 }
+bool VipProcessingObject::isBeingDestroyed() const noexcept
+{
+	return d_data->destruct;
+}
 VipSpinlock& VipProcessingObject::runLock() noexcept
 {
 	return d_data->run_mutex;
 }
 void VipProcessingObject::runNoLock()
 {
+	if (VIP_UNLIKELY(d_data->destruct))
+		return;
+
 	if (testScheduleStrategy(SkipIfNoInput)) {
 		// if the processing has no new input, skip it
 		bool has_input = false;

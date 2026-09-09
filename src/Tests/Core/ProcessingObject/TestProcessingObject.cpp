@@ -845,6 +845,34 @@ private Q_SLOTS:
 		QCOMPARE(target.objectName(), QString("original"));
 		QVERIFY2(target.isProcessingVisible(), "a field that was never read must not be applied");
 	}
+
+	/// The task pool outlives the derived parts of the object: it is destroyed by
+	/// the base destructor, after every derived destructor has run. Nothing may
+	/// be submitted or run from the moment destruction starts.
+	void anObjectBeingDestroyedTakesNoMoreWork()
+	{
+		MultiplyByProperty* processing = new MultiplyByProperty();
+		processing->inputAt(0)->setData(VipAnyData(QVariant(3.0), 0));
+		QVERIFY(processing->update(true));
+		const int applied = processing->applyCount.load();
+
+		bool seen = false;
+		bool accepted = true;
+		bool flagged = false;
+		QObject::connect(processing, &VipProcessingObject::destroyed, processing, [&](VipProcessingObject* obj) {
+			seen = true;
+			flagged = obj->isBeingDestroyed();
+			obj->inputAt(0)->setData(VipAnyData(QVariant(5.0), 1));
+			accepted = obj->update(true);
+		});
+
+		delete processing;
+
+		QVERIFY2(seen, "the destruction signal must reach the slot");
+		QVERIFY2(flagged, "the object must know it is being destroyed");
+		QVERIFY2(!accepted, "no work may be submitted once destruction has started");
+		Q_UNUSED(applied);
+	}
 };
 
 VIP_TEST_MAIN(TestProcessingObject)
