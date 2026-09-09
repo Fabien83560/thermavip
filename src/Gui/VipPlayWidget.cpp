@@ -3311,12 +3311,17 @@ VipArchive& operator>>(VipArchive& arch, VipPlayWidget* w)
 	w->setPlaySpeed(arch.read("speed").toDouble());
 	w->area()->setTime(arch.read("time").toDouble());
 
-	VipScaleDiv divx = arch.read("x_scale").value<VipScaleDiv>();
-	VipScaleDiv divy = arch.read("y_scale").value<VipScaleDiv>();
+	// Named after the axis they belong to, not after the archive key: the writer
+	// stores the bottom axis under x_scale and the left one under y_scale, and the
+	// two used to be applied the other way round. With auto scale off, a reopened
+	// session showed the time axis bounded by track indices and the vertical axis
+	// by timestamps.
+	VipScaleDiv div_bottom = arch.read("x_scale").value<VipScaleDiv>();
+	VipScaleDiv div_left = arch.read("y_scale").value<VipScaleDiv>();
 
 	if (!w->isAutoScale()) {
-		w->area()->leftAxis()->setScaleDiv(divx);
-		w->area()->bottomAxis()->setScaleDiv(divy);
+		w->area()->bottomAxis()->setScaleDiv(div_bottom);
+		w->area()->leftAxis()->setScaleDiv(div_left);
 	}
 
 	w->setTimeRangesLocked(arch.read("locked").toBool());

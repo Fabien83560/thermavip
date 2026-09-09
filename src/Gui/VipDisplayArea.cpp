@@ -4878,23 +4878,29 @@ void VipMainWindow::closeEvent(QCloseEvent* evt)
 	QList<VipAbstractPlayer*> lst = this->findChildren<VipAbstractPlayer*>();
 
 	// only ask for saving session if there is at least one SubWindow left
+	const QString lastSession = vipGetDataDirectory() + "last_session.session";
+	const QString baseSession = vipGetDataDirectory() + "base_session.session";
+
 	if (lst.size() > 0 && d_data->sessionSavingEnabled) {
 		int res = vipQuestion("Save session", "Do you want to save your session?", QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
 		if (res == QMessageBox::Yes) {
-			saveSession(vipGetDataDirectory() + "last_session.session");
+			// The return was ignored, so a read only directory failed a save the user
+			// had just asked for, in silence, on the way out.
+			if (!saveSession(lastSession)) {
+				if (vipQuestion("Save session", "The session could not be saved.\nClose anyway?") != QMessageBox::Yes)
+					no_close = true;
+			}
 		}
 		else if (res == QMessageBox::No) {
-			saveSession(vipGetDataDirectory() + "base_session.session", MainWindow, MainWindowState | Plugins | Settings);
-			// remove last_session file
-			QFile::remove(vipGetDataDirectory() + "last_session.session");
+			// Declining to save today used to delete the session saved on a previous
+			// close, which the question gives no reason to expect. Keep it.
+			saveSession(baseSession, MainWindow, MainWindowState | Plugins | Settings);
 		}
 		else
 			no_close = true;
 	}
 	else {
-		saveSession(vipGetDataDirectory() + "base_session.session", MainWindow, MainWindowState | Plugins | Settings);
-		// remove last_session file
-		QFile::remove(vipGetDataDirectory() + "last_session.session");
+		saveSession(baseSession, MainWindow, MainWindowState | Plugins | Settings);
 	}
 
 	if (no_close)
