@@ -291,7 +291,10 @@ static QSqlDatabase createConnection(const DB & param, bool reset = false)
 		//QSqlDatabase::removeDatabase("in_mem_db");
 
 		//db = QSqlDatabase::addDatabase("QMYSQL", "mysql_database");
-		QString opts = "MYSQL_OPT_CONNECT_TIMEOUT=36000;MYSQL_OPT_READ_TIMEOUT=100;MYSQL_OPT_WRITE_TIMEOUT=100;";
+		// Ten seconds, in seconds. It read 36000, ten hours: a host that answers
+		// the ping but drops the database port left the interface frozen on the
+		// opening of the socket, with nothing to cancel.
+		QString opts = "MYSQL_OPT_CONNECT_TIMEOUT=10;MYSQL_OPT_READ_TIMEOUT=100;MYSQL_OPT_WRITE_TIMEOUT=100;";
 		// Nothing in the project asked for TLS, so credentials and query results
 		// crossed the network in the clear whatever the server supported.
 		if (!param.ssl_mode.isEmpty())
