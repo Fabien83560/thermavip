@@ -2228,8 +2228,10 @@ int TaskPool::remaining() const
 
 void TaskPool::clear()
 {
-	if (m_run.load(std::memory_order_relaxed))
-		m_clear.store(true);
+	// Unconditionally: the test and the action were two separate atomics, so a
+	// task pushed between them survived the clear, and a clear asked for while the
+	// queue happened to be empty was simply lost.
+	m_clear.store(true);
 }
 
 class VipProcessingObject::PrivateData
@@ -2326,14 +2328,17 @@ public:
 	bool processingDonePending = false;
 
 	// inputs, outputs and properties
-	int initializeIO;
+	// Atomic: the fast path of initialize() reads them without the lock that the
+	// slow path writes them under, which is a race and a decision taken on a value
+	// being changed.
+	std::atomic<int> initializeIO;
 	std::vector<std::unique_ptr<VipProcessingIO>> inputs;
 	std::vector<std::unique_ptr<VipProcessingIO>> outputs;
 	std::vector<std::unique_ptr<VipProcessingIO>> properties;
 	std::function<void()> onInitIO;
 
 	// flatten representations
-	bool dirtyIO;
+	std::atomic<bool> dirtyIO;
 	// Here, use std::vector to avoid going through the shared counter
 	std::vector<VipInput*> flatInputs;
 	std::vector<VipOutput*> flatOutputs;
@@ -2554,48 +2559,56 @@ static std::vector<TYPE*> flatten(const std::vector<std::unique_ptr<VipProcessin
 
 void VipProcessingObject::internalInitIO(bool force) const
 {
-	VipUniqueLock<VipSpinlock> locker(const_cast<VipSpinlock&>(d_data->init_lock));
-	if (force || !d_data->initializeIO || d_data->dirtyIO || d_data->initializeIO != metaObject()->propertyCount()) {
+	// The callback is run once the lock is released. Building a multi input under
+	// it marks the object dirty, which emits and walks the sources, which comes
+	// back here on the same thread: this lock does not nest, and that froze.
+	std::function<void()> callback;
+	{
+		VipUniqueLock<VipSpinlock> locker(const_cast<VipSpinlock&>(d_data->init_lock));
+		if (force || !d_data->initializeIO || d_data->dirtyIO || d_data->initializeIO != metaObject()->propertyCount()) {
 
-		const QMetaObject* meta = metaObject();
-		VipProcessingObject* _this = const_cast<VipProcessingObject*>(this);
+			const QMetaObject* meta = metaObject();
+			VipProcessingObject* _this = const_cast<VipProcessingObject*>(this);
 
-		for (; d_data->initializeIO < meta->propertyCount(); ++d_data->initializeIO) {
-			const int i = d_data->initializeIO;
-			const int type = meta->property(i).userType();
+			for (; d_data->initializeIO < meta->propertyCount(); ++d_data->initializeIO) {
+				const int i = d_data->initializeIO;
+				const int type = meta->property(i).userType();
 
-			if (type == qMetaTypeId<VipInput>())
-				_this->d_data->inputs.push_back(std::unique_ptr<VipProcessingIO>(new VipInput(meta->property(i).name(), _this)));
-			else if (type == qMetaTypeId<VipMultiInput>())
-				_this->d_data->inputs.push_back(std::unique_ptr<VipProcessingIO>(new VipMultiInput(meta->property(i).name(), _this)));
-			else if (type == qMetaTypeId<VipProperty>())
-				_this->d_data->properties.push_back(std::unique_ptr<VipProcessingIO>(new VipProperty(meta->property(i).name(), _this)));
-			else if (type == qMetaTypeId<VipMultiProperty>())
-				_this->d_data->properties.push_back(std::unique_ptr<VipProcessingIO>(new VipMultiProperty(meta->property(i).name(), _this)));
-			else if (type == qMetaTypeId<VipOutput>())
-				_this->d_data->outputs.push_back(std::unique_ptr<VipProcessingIO>(new VipOutput(meta->property(i).name(), _this)));
-			else if (type == qMetaTypeId<VipMultiOutput>())
-				_this->d_data->outputs.push_back(std::unique_ptr<VipProcessingIO>(new VipMultiOutput(meta->property(i).name(), _this)));
+				if (type == qMetaTypeId<VipInput>())
+					_this->d_data->inputs.push_back(std::unique_ptr<VipProcessingIO>(new VipInput(meta->property(i).name(), _this)));
+				else if (type == qMetaTypeId<VipMultiInput>())
+					_this->d_data->inputs.push_back(std::unique_ptr<VipProcessingIO>(new VipMultiInput(meta->property(i).name(), _this)));
+				else if (type == qMetaTypeId<VipProperty>())
+					_this->d_data->properties.push_back(std::unique_ptr<VipProcessingIO>(new VipProperty(meta->property(i).name(), _this)));
+				else if (type == qMetaTypeId<VipMultiProperty>())
+					_this->d_data->properties.push_back(std::unique_ptr<VipProcessingIO>(new VipMultiProperty(meta->property(i).name(), _this)));
+				else if (type == qMetaTypeId<VipOutput>())
+					_this->d_data->outputs.push_back(std::unique_ptr<VipProcessingIO>(new VipOutput(meta->property(i).name(), _this)));
+				else if (type == qMetaTypeId<VipMultiOutput>())
+					_this->d_data->outputs.push_back(std::unique_ptr<VipProcessingIO>(new VipMultiOutput(meta->property(i).name(), _this)));
+			}
+
+			_this->d_data->flatInputs = flatten<VipInput>(d_data->inputs);
+			_this->d_data->flatOutputs = flatten<VipOutput>(d_data->outputs);
+			_this->d_data->flatProperties = flatten<VipProperty>(d_data->properties);
+
+			for (size_t i = 0; i < d_data->flatInputs.size(); ++i)
+				_this->d_data->flatInputs[i]->setParentProcessing(_this);
+
+			for (size_t i = 0; i < d_data->flatOutputs.size(); ++i)
+				_this->d_data->flatOutputs[i]->setParentProcessing(_this);
+
+			for (size_t i = 0; i < d_data->flatProperties.size(); ++i)
+				_this->d_data->flatProperties[i]->setParentProcessing(_this);
+
+			_this->d_data->dirtyIO = false;
+
+			callback = _this->d_data->onInitIO;
 		}
-
-		_this->d_data->flatInputs = flatten<VipInput>(d_data->inputs);
-		_this->d_data->flatOutputs = flatten<VipOutput>(d_data->outputs);
-		_this->d_data->flatProperties = flatten<VipProperty>(d_data->properties);
-
-		for (size_t i = 0; i < d_data->flatInputs.size(); ++i)
-			_this->d_data->flatInputs[i]->setParentProcessing(_this);
-
-		for (size_t i = 0; i < d_data->flatOutputs.size(); ++i)
-			_this->d_data->flatOutputs[i]->setParentProcessing(_this);
-
-		for (size_t i = 0; i < d_data->flatProperties.size(); ++i)
-			_this->d_data->flatProperties[i]->setParentProcessing(_this);
-
-		_this->d_data->dirtyIO = false;
-
-		if (_this->d_data->onInitIO)
-			_this->d_data->onInitIO();
 	}
+
+	if (callback)
+		callback();
 }
 
 void VipProcessingObject::setIOInitializeFunction(const std::function<void()>& f)
