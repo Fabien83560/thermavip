@@ -1241,6 +1241,31 @@ private Q_SLOTS:
 		QVERIFY2(seen.load() > 0, "the reader must have seen an error");
 		QVERIFY(!proc.hasError());
 	}
+
+	/// Asking which processings accept a list of inputs resized the multi input
+	/// of every candidate prototype to the size of that list. The prototypes are
+	/// shared for the life of the process, so the answer depended on the previous
+	/// question, and two questions at once wrote the same container.
+	void queryingTheProcessingsLeavesThePrototypesAlone()
+	{
+		const QList<const VipProcessingObject*> all = VipProcessingObject::allObjects();
+
+		QMap<const VipProcessingObject*, int> before;
+		for (const VipProcessingObject* obj : all)
+			if (obj->topLevelInputCount() > 0)
+				if (VipMultiInput* multi = obj->topLevelInputAt(0)->toMultiInput())
+					if (multi->minSize() <= 3 && multi->maxSize() >= 3)
+						before[obj] = multi->count();
+
+		QVERIFY2(!before.isEmpty(), "the library must register at least one multi input processing");
+
+		QVariantList three;
+		three << QVariant(1.0) << QVariant(2.0) << QVariant(3.0);
+		VipProcessingObject::validProcessingObjects<VipProcessingObject*>(three);
+
+		for (QMap<const VipProcessingObject*, int>::const_iterator it = before.begin(); it != before.end(); ++it)
+			QCOMPARE(it.key()->topLevelInputAt(0)->toMultiInput()->count(), it.value());
+	}
 };
 
 VIP_TEST_MAIN(TestProcessingObject)

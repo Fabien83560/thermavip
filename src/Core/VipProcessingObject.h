@@ -2181,16 +2181,21 @@ QMultiMap<QString, VipProcessingObject::Info> VipProcessingObject::validProcessi
 			}
 		}
 		else {
+			// The objects walked here are the shared prototypes, alive for the
+			// whole process. Resizing one of them left every later query reading a
+			// number this one had just written, and two queries at once wrote the
+			// same container. Read the bounds and keep the count local.
+			int expected_input_count = obj->inputCount();
 			if (obj->topLevelInputCount() > 0)
-				if (VipMultiInput* multi = obj->topLevelInputAt(0)->toMultiInput()) {
+				if (const VipMultiInput* multi = obj->topLevelInputAt(0)->toMultiInput()) {
 					if (multi->minSize() > lst.size() || lst.size() > multi->maxSize()) {
 						// min/max size of VipMultiInput not compatible with the input list
 						continue;
 					}
-					multi->resize(lst.size());
+					expected_input_count = static_cast<int>(lst.size());
 				}
 
-			if (lst.size() == obj->inputCount()) {
+			if (lst.size() == expected_input_count) {
 				bool accept_all = true;
 				for (int j = 0; j < lst.size(); ++j) {
 					if (!obj->acceptInput(j, lst[j]) && lst[j].userType() != 0) {
