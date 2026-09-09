@@ -134,7 +134,10 @@ namespace detail
 	template<class T>
 	T stringToType(const QString& str)
 	{
-		T res;
+		// Value initialised: an extraction that fails leaves it untouched, and these
+		// two are wired as Qt metatype converters, which have no error channel at
+		// all: the caller cannot tell a failure from a success.
+		T res = T();
 		QTextStream stream(const_cast<QString*>(&str), QIODevice::ReadOnly);
 		stream >> res;
 		return res;
@@ -155,7 +158,7 @@ namespace detail
 	template<class T>
 	T byteArrayToType(const QByteArray& str)
 	{
-		T res;
+		T res = T();
 		QTextStream stream(const_cast<QByteArray*>(&str), QIODevice::ReadOnly);
 		stream >> res;
 		return res;

@@ -420,6 +420,36 @@ private Q_SLOTS:
 			QCOMPARE(v[i + 4], i);
 		}
 	}
+
+	/// A text file is read through these, and the result of a failed parse used
+	/// to be whatever the stack held: the variable was declared without an
+	/// initialiser, and none of the callers passes the flag that would tell them.
+	void aFailedLongDoubleParseReturnsZero()
+	{
+		bool ok = true;
+		QCOMPARE((double)vipLongDoubleFromString(QStringLiteral("not a number"), &ok), 0.0);
+		QVERIFY(!ok);
+
+		ok = true;
+		QCOMPARE((double)vipLongDoubleFromByteArray(QByteArray("not a number"), &ok), 0.0);
+		QVERIFY(!ok);
+
+		QCOMPARE((double)vipLongDoubleFromString(QString(), nullptr), 0.0);
+		QCOMPARE((double)vipLongDoubleFromByteArray(QByteArray(), nullptr), 0.0);
+
+		// And a number still parses.
+		ok = false;
+		QCOMPARE((double)vipLongDoubleFromString(QStringLiteral("2.5"), &ok), 2.5);
+		QVERIFY(ok);
+	}
+
+	/// The same through the metatype converters, which have no error channel: a
+	/// caller cannot tell a failure from a success there.
+	void aFailedConversionThroughAVariantReturnsZero()
+	{
+		QCOMPARE((double)QVariant(QStringLiteral("not a number")).value<vip_long_double>(), 0.0);
+		QCOMPARE((double)QVariant(QByteArray("not a number")).value<vip_long_double>(), 0.0);
+	}
 };
 
 VIP_TEST_MAIN(TestSerialization)
