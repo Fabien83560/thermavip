@@ -37,6 +37,7 @@
 #include <QDebug>
 #include <QMetaObject>
 #include <QMetaProperty>
+#include <QPointer>
 #include <QReadWriteLock>
 #include <QStringList>
 #include <qcoreapplication.h>
@@ -3613,51 +3614,59 @@ bool VipProcessingObject::wait(bool wait_for_sources, int max_milli_time)
 
 	const bool use_event_loop = this->useEventLoop();
 
+	// The turns below re-enter the event loop, so a slot can start destroying this
+	// object while the wait is still on the stack; destruction was only tested on
+	// entry. And a wait with no deadline is a wait that may never end, which is
+	// the default. Both are now checked on every turn.
+	const QPointer<VipProcessingObject> alive(this);
+	const qint64 default_max_milli_time = 30000;
+	const qint64 deadline = start + (max_milli_time > 0 ? max_milli_time : default_max_milli_time);
+
 	// Since only display processings use the event loop, start waiting for the processing 10 ms before going throught the event loop
 	if (TaskPool* p = d_data->getPool()) {
 
 		// Special case: the processing needs the event loop, and we are waiting from within the GUI thread
-		while (use_event_loop && this->scheduledUpdates() && QCoreApplication::instance() && QThread::currentThread() == QCoreApplication::instance()->thread()) {
+		while (use_event_loop && QCoreApplication::instance() && QThread::currentThread() == QCoreApplication::instance()->thread()) {
+			if (alive.isNull() || d_data->destruct)
+				return false;
+			if (!this->scheduledUpdates())
+				break;
 			if (vipProcessEvents(nullptr, 20) == -3)
 				break;
-			if (max_milli_time > 0) {
-				qint64 remaining = max_milli_time - (QDateTime::currentMSecsSinceEpoch() - start);
-				if (remaining < 0)
-					return false;
-			}
+			if (QDateTime::currentMSecsSinceEpoch() > deadline)
+				return false;
 		}
+
+		// The pool below belongs to this object: it must still be there.
+		if (alive.isNull() || d_data->destruct)
+			return false;
 
 		if (!p->waitForDone(10)) {
 			if (QCoreApplication::instance() && use_event_loop) {
-				while (this->scheduledUpdates()) {
+				for (;;) {
+					if (alive.isNull() || d_data->destruct)
+						return false;
+					if (!this->scheduledUpdates())
+						break;
 					// stop waiting if vipProcessEvents is called recursively
 					if (vipProcessEvents(nullptr, 2) == -3)
 						break;
-
-					if (max_milli_time > 0) {
-						qint64 remaining = max_milli_time - (QDateTime::currentMSecsSinceEpoch() - start);
-						if (remaining < 0)
-							return false;
-					}
+					if (QDateTime::currentMSecsSinceEpoch() > deadline)
+						return false;
 				}
 			}
-			else if (max_milli_time > 0) {
-				qint64 remaining = max_milli_time - (QDateTime::currentMSecsSinceEpoch() - start);
+			else {
+				const qint64 remaining = deadline - QDateTime::currentMSecsSinceEpoch();
 				if (remaining < 0)
 					return false;
-				p->waitForDone(remaining);
-			}
-			else {
-				p->waitForDone();
+				p->waitForDone(static_cast<int>(remaining));
 			}
 		}
 	}
 	else if (VipIODevice* dev = qobject_cast<VipIODevice*>(this)) {
 		// Wait for the device to read its current data. The device offers nothing
 		// to block on, so this polls; what it must not do is poll for ever when no
-		// deadline was asked for, which is the default.
-		const qint64 default_max_milli_time = 30000;
-		const qint64 deadline = start + (max_milli_time > 0 ? max_milli_time : default_max_milli_time);
+		// deadline was asked for.
 		const qint64 time = dev->time();
 		while (dev->isReading() && dev->time() == time) {
 			if (QDateTime::currentMSecsSinceEpoch() > deadline) {
@@ -4656,7 +4665,10 @@ VipSceneModel VipSceneModelBasedProcessing::sceneModel()
 
 	// Check if the first property is connected to a source, and grab the scenemodel from this source
 	if (VipOutput* src = propertyAt(0)->connection()->source()) {
-		src->parentProcessing()->wait();
+		// An output can outlive the processing that owns it, and a connection can
+		// name a source that has none.
+		if (VipProcessingObject* parent = src->parentProcessing())
+			parent->wait();
 		QVariant v = src->data().data();
 		if (v.userType() == qMetaTypeId<VipSceneModel>()) {
 			sm = v.value<VipSceneModel>();
@@ -4700,17 +4712,28 @@ VipSceneModel VipSceneModelBasedProcessing::sceneModel()
 	if (!found)
 		return d_data->rawScene;
 
-	// connect the VipShapeSignals to the reload() slot
-	if (sm.shapeSignals() != d_data->shapeSignals) {
-		if (d_data->shapeSignals) {
-			disconnect(d_data->shapeSignals, SIGNAL(sceneModelChanged(const VipSceneModel&)), this, SLOT(dirtyShape()));
-			disconnect(d_data->shapeSignals, SIGNAL(sceneModelChanged(const VipSceneModel&)), this, SLOT(reload()));
-		}
-		if ((d_data->shapeSignals = sm.shapeSignals())) {
-			if (d_data->reloadOnSceneChanges)
-				connect(d_data->shapeSignals, SIGNAL(sceneModelChanged(const VipSceneModel&)), this, SLOT(reload()));
-			connect(d_data->shapeSignals, SIGNAL(sceneModelChanged(const VipSceneModel&)), this, SLOT(dirtyShape()));
-		}
+	// Connect the VipShapeSignals to the reload() slot. This function is called
+	// from the threads that process, so the swap is done under the lock that
+	// already guards the neighbouring state, and the connections are made once it
+	// is released.
+	QPointer<VipShapeSignals> previous;
+	VipShapeSignals* current = sm.shapeSignals();
+	{
+		QWriteLocker lock(&d_data->shapeLock);
+		if (current == d_data->shapeSignals)
+			return sm;
+		previous = d_data->shapeSignals;
+		d_data->shapeSignals = current;
+	}
+
+	if (previous) {
+		disconnect(previous, SIGNAL(sceneModelChanged(const VipSceneModel&)), this, SLOT(dirtyShape()));
+		disconnect(previous, SIGNAL(sceneModelChanged(const VipSceneModel&)), this, SLOT(reload()));
+	}
+	if (current) {
+		if (d_data->reloadOnSceneChanges)
+			connect(current, SIGNAL(sceneModelChanged(const VipSceneModel&)), this, SLOT(reload()));
+		connect(current, SIGNAL(sceneModelChanged(const VipSceneModel&)), this, SLOT(dirtyShape()));
 	}
 
 	return sm;
