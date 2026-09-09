@@ -2002,7 +2002,10 @@ class TaskPool
 	std::atomic<bool> m_clear{ false };
 	VipProcessingObject* m_parent;
 	Thread m_thread;
-	bool m_stop;
+	// Atomic: written by the destructor, read in the loop of the pool thread. A
+	// plain bool leaves the thread free never to observe the write, and the wait
+	// below then never returns.
+	std::atomic<bool> m_stop{ false };
 	void atomWait(UniqueLock& ll, int milli);
 
 protected:
@@ -2179,8 +2182,12 @@ public:
 	struct Parameters
 	{
 		VipProcessingObject::ScheduleStrategies schedule_strategies;
-		bool visible;
-		bool enable;
+		// Atomic, rather than plain bools reinterpreted as atomics at each access:
+		// reading a bool through an lvalue of another type is undefined, and the
+		// copies below went through the plain type anyway, which cancelled what the
+		// reinterpretation was for. The copies transfer them by load and store.
+		std::atomic<bool> visible;
+		std::atomic<bool> enable;
 		bool deleteOnOutputConnectionsClosed;
 		int errorBufferMaxSize;
 		// attributes
@@ -2198,6 +2205,27 @@ public:
 		  , errorBufferMaxSize(errorBufferMaxSize)
 		  , attributes(attrs)
 		{
+		}
+		Parameters(const Parameters& other)
+		  : schedule_strategies(other.schedule_strategies)
+		  , visible(other.visible.load())
+		  , enable(other.enable.load())
+		  , deleteOnOutputConnectionsClosed(other.deleteOnOutputConnectionsClosed)
+		  , errorBufferMaxSize(other.errorBufferMaxSize)
+		  , attributes(other.attributes)
+		{
+		}
+		Parameters& operator=(const Parameters& other)
+		{
+			if (this != &other) {
+				schedule_strategies = other.schedule_strategies;
+				visible.store(other.visible.load());
+				enable.store(other.enable.load());
+				deleteOnOutputConnectionsClosed = other.deleteOnOutputConnectionsClosed;
+				errorBufferMaxSize = other.errorBufferMaxSize;
+				attributes = other.attributes;
+			}
+			return *this;
 		}
 	};
 
@@ -3340,17 +3368,12 @@ bool VipProcessingObject::deleteOnOutputConnectionsClosed() const
 	return d_data->parameters.deleteOnOutputConnectionsClosed;
 }
 
-static std::atomic<bool>& atomic_ref(bool& value)
-{
-	static_assert(sizeof(bool) == sizeof(std::atomic<bool>), "unsupported atomic ref on this platform");
-	return reinterpret_cast<std::atomic<bool>&>(value);
-}
 
 
 void VipProcessingObject::setEnabled(bool enable)
 {
 	bool expect = !enable;
-	if (atomic_ref(d_data->parameters.enable).compare_exchange_weak(expect, enable)) {
+	if (d_data->parameters.enable.compare_exchange_weak(expect, enable)) {
 		emitProcessingChanged();
 	}
 }
@@ -3358,19 +3381,19 @@ void VipProcessingObject::setEnabled(bool enable)
 void VipProcessingObject::setProcessingVisible(bool vis)
 {
 	bool expect = !vis;
-	if (atomic_ref(d_data->parameters.visible).compare_exchange_weak(expect, vis)) {
+	if (d_data->parameters.visible.compare_exchange_weak(expect, vis)) {
 		emitProcessingChanged();
 	}
 }
 
 bool VipProcessingObject::isProcessingVisible() const
 {
-	return atomic_ref(d_data->parameters.visible).load(std::memory_order_relaxed);
+	return d_data->parameters.visible.load(std::memory_order_relaxed);
 }
 
 bool VipProcessingObject::isEnabled() const
 {
-	return atomic_ref(d_data->parameters.enable).load(std::memory_order_relaxed);
+	return d_data->parameters.enable.load(std::memory_order_relaxed);
 }
 
 bool VipProcessingObject::update(bool force_run)
