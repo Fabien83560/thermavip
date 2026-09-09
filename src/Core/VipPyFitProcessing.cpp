@@ -197,8 +197,12 @@ static QVariantList applyCurveFit(const VipAnyData& any,
 	// get the input curve
 	VipPointVector curve = any.value<VipPointVector>();
 
-	if (!curve.size()) {
-		error = ("VipPyFitLinear: empty input curve");
+	if (curve.size() < 2) {
+		// One point, or none, reaches the slope below and divides by zero. The
+		// starting parameters are then formatted into the Python call, where nan and
+		// inf are names rather than literals, so the user gets a NameError about
+		// something unrelated.
+		error = ("VipPyFitLinear: a fit needs at least two points");
 		return QVariantList();
 	}
 
@@ -258,17 +262,33 @@ static QVariantList applyCurveFit(const VipAnyData& any,
 		if (fit_type == VipPyFitProcessing::Exponential) {
 			double a = 1, b = 1, c = 1;
 			type = exponentialStartParams(curve, a, b, c);
-			add = "p0=[" + QString::number(a) + "," + QString::number(b) + "," + QString::number(c) + "]";
+			// A starting parameter that is not finite is formatted as "nan" or "inf",
+			// which Python reads as a name and not as a number.
+			if (vipIsNan(a) || vipIsNan(b) || vipIsNan(c) || vipIsInf(a) || vipIsInf(b) || vipIsInf(c))
+				add = QString();
+			else
+				add = "p0=[" + QString::number(a) + "," + QString::number(b) + "," + QString::number(c) + "]";
 		}
 		else if (fit_type == VipPyFitProcessing::Linear) {
-			double a = (curve.last().y() - curve.first().y()) / (curve.last().x() - curve.first().x());
-			double b = curve.first().y() - a * curve.first().x();
-			add = "p0=[" + QString::number(a) + "," + QString::number(b) + "]";
+			const double dx = curve.last().x() - curve.first().x();
+			if (dx == 0) {
+				// Two points at the same abscissa: no slope to start from. Let the fit
+				// choose its own starting point rather than pass it nan.
+				add = QString();
+			}
+			else {
+				const double a = (curve.last().y() - curve.first().y()) / dx;
+				const double b = curve.first().y() - a * curve.first().x();
+				add = "p0=[" + QString::number(a) + "," + QString::number(b) + "]";
+			}
 		}
 		else if (fit_type == VipPyFitProcessing::Gaussian) {
 			double a = 1, b = 1, c = 1, d = 1;
 			gaussianStartParams(curve, a, b, c, d);
-			add = "p0=[" + QString::number(a) + "," + QString::number(b) + "," + QString::number(c) + "," + QString::number(d) + "]";
+			if (vipIsNan(a) || vipIsNan(b) || vipIsNan(c) || vipIsNan(d) || vipIsInf(a) || vipIsInf(b) || vipIsInf(c) || vipIsInf(d))
+				add = QString();
+			else
+				add = "p0=[" + QString::number(a) + "," + QString::number(b) + "," + QString::number(c) + "," + QString::number(d) + "]";
 		}
 
 		QVariantMap map;

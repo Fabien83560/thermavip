@@ -53,6 +53,7 @@ extern "C" {
 //#endif
 #endif
 
+#include "VipLogging.h"
 #include "VipPyProcessing.h"
 #include "VipPyRegisterProcessing.h"
 #include "VipArchive.h"
@@ -308,11 +309,15 @@ void VipPyProcessing::setStdProcessingParameters(const QVariantMap& args, const 
 	// for a standard processing (Py file in vipGetPythonDirectory()), set the processing class parameters.
 	// this will call the processing memeber 'setParameters'.
 
-	if (d_data->std_proc_name.isEmpty())
-		return;
-
+	// Keep them whatever happens. This returned before storing them, so opening a
+	// session on a machine where the Python class is not installed dropped the
+	// parameters, and saving the session again wrote the empty map back: the
+	// settings were lost by opening and re-saving, without a word.
 	d_data->stdProcessingParameters = args;
 	d_data->extractParameters.clear();
+
+	if (d_data->std_proc_name.isEmpty())
+		return;
 
 	// Names and values used to be pasted into the source of the call. Both come
 	// out of a session file, where a closing parenthesis or a newline in either
@@ -798,7 +803,11 @@ VipArchive& operator<<(VipArchive& ar, VipPyProcessing* p)
 VipArchive& operator>>(VipArchive& ar, VipPyProcessing* p)
 {
 	p->setMaxExecutionTime(ar.read("maxExecutionTime").toInt());
-	p->setStdPyProcessingFile(ar.read("stdPyProcessingFile").toString());
+	// The order matters and nothing enforces it: the file has to be resolved before
+	// the parameters are applied.
+	const QString proc_file = ar.read("stdPyProcessingFile").toString();
+	if (!proc_file.isEmpty() && !p->setStdPyProcessingFile(proc_file))
+		VIP_LOG_WARNING("Python processing '" + proc_file + "' is not available here; its parameters are kept but not applied");
 	p->setStdProcessingParameters(ar.read("stdProcessingParameters").value<QVariantMap>());
 
 	QVariantMap std = p->stdProcessingParameters();

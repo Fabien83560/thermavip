@@ -29,6 +29,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "VipLogging.h"
 #include "VipPyNPZDevice.h"
 
 class VipPyNPZDevice::PrivateData
@@ -46,7 +47,9 @@ VipPyNPZDevice::VipPyNPZDevice(QObject* parent)
 
 VipPyNPZDevice::~VipPyNPZDevice()
 {
-	close();
+	// Qualified: during destruction the override is no longer the one that
+	// writes, so an unqualified call would leave the file unwritten.
+	VipPyNPZDevice::close();
 }
 
 bool VipPyNPZDevice::open(VipIODevice::OpenModes mode)
@@ -84,20 +87,21 @@ void VipPyNPZDevice::apply()
 
 		QString varname = "arr" + QString::number((qint64)this);
 		QString newname = "new" + QString::number((qint64)this);
+		// A bare except caught everything and assigned the last image to the
+		// accumulator, so one failed stack part way through a recording replaced the
+		// whole sequence acquired so far with a single frame, without a word. The
+		// two cases are told apart: the first frame starts the stack, a later one is
+		// appended, and a real failure is reported instead of swallowed.
 		QString code = "import numpy as np\n"
-			       "try: \n"
-			       "  if " +
-			       varname + ".shape == " + newname + ".shape: " + varname + ".shape=(1,*" + varname +
-			       ".shape)\n"
+			       "if '" +
+			       varname + "' not in globals():\n"
 			       "  " +
-			       newname + ".shape=(1,*" + newname +
-			       ".shape)\n"
+			       varname + " = " + newname + ".reshape((1, *" + newname +
+			       ".shape))\n"
+			       "else:\n"
 			       "  " +
-			       varname + " = np.vstack((" + varname + "," + newname +
-			       "))\n"
-			       "except:\n"
-			       "  " +
-			       varname + "=" + newname + "\n";
+			       varname + " = np.vstack((" + varname + ", " + newname + ".reshape((1, *" + newname +
+			       ".shape))))\n";
 
 		// vip_debug("%s\n", code.toLatin1().data());
 
@@ -175,6 +179,9 @@ void VipPyNPZDevice::close()
 
 	lastError = VipPyInterpreter::instance()->execCode(code).value(10000).value<VipPyError>();
 	if (!lastError.isNull()) {
+		// close() returns void and the destructor calls it, so this is the only
+		// place a failed write can be reported at all.
+		VIP_LOG_ERROR("Cannot write " + path() + ": " + lastError.traceback);
 		setError(lastError.traceback);
 		return;
 	}
@@ -195,7 +202,9 @@ VipPyMATDevice::VipPyMATDevice(QObject* parent)
 
 VipPyMATDevice::~VipPyMATDevice()
 {
-	close();
+	// Qualified: during destruction the override is no longer the one that
+	// writes, so an unqualified call would leave the file unwritten.
+	VipPyMATDevice::close();
 }
 
 bool VipPyMATDevice::open(VipIODevice::OpenModes mode)
@@ -323,6 +332,9 @@ void VipPyMATDevice::close()
 
 	lastError = VipPyInterpreter::instance()->execCode(code).value(10000).value<VipPyError>();
 	if (!lastError.isNull()) {
+		// close() returns void and the destructor calls it, so this is the only
+		// place a failed write can be reported at all.
+		VIP_LOG_ERROR("Cannot write " + path() + ": " + lastError.traceback);
 		setError(lastError.traceback);
 		return;
 	}

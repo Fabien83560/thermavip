@@ -47,7 +47,10 @@ void VipPySignalGenerator::ReadThread::run()
 		if (!gen->readData(time * 1000000))
 			break;
 		qint64 el = QDateTime::currentMSecsSinceEpoch() - st;
-		int sleep = gen->propertyAt(0)->value<int>() / 1000000 - el;
+		// The same property is read as qint64 when the device opens. Read as an int,
+		// a period above 2.1 seconds overflows and the sleep is skipped, so the loop
+		// spins with no pause at all.
+		const qint64 sleep = gen->propertyAt(0)->value<qint64>() / 1000000 - el;
 		if (sleep > 0)
 			vipSleep(sleep);
 	}
@@ -165,7 +168,18 @@ bool VipPySignalGenerator::open(VipIODevice::OpenModes mode)
 				if (!ok)
 					return false;
 
-				vector.append(QPointF(time, value.toDouble()));
+				// The first sample's conversion is checked above, and it decides the
+				// strategy; the ones after it were not. QVariant::toDouble returns 0.0
+				// on failure, so an expression that changes nature partway through the
+				// range filled the curve with zeros no one could tell from measured
+				// ones.
+				bool converted = false;
+				const double y = value.toDouble(&converted);
+				if (!converted) {
+					setError("Expression did not produce a number at time " + QString::number(time));
+					return false;
+				}
+				vector.append(QPointF(time, y));
 
 				if ((index & 0xff) == 0) {
 					progress.setValue((double)index);
