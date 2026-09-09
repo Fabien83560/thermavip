@@ -2303,7 +2303,13 @@ public:
 		logErrors = VipProcessingManager::logErrors();
 	}
 
-	VipSpinlock update_mutex;
+	// A blocking mutex, not a spinlock: the section it guards runs the whole
+	// processing in the calling thread, so a second caller used to burn a core
+	// for as long as the processing lasted.
+	QMutex update_mutex;
+	// Counts the calls to update() in flight. The lock above is released before
+	// the wait for the result, this is not: it is what isUpdating() answers.
+	std::atomic<int> updating{ 0 };
 	VipSpinlock run_mutex;
 	VipSpinlock error_mutex;
 	VipSpinlock init_lock;
@@ -3477,7 +3483,14 @@ bool VipProcessingObject::update(bool force_run)
 	initialize();
 
 	// Make sure update() cannot be called simultaneously from different threads
-	SPIN_LOCK(d_data->update_mutex);
+	QMutexLocker update_locker(&d_data->update_mutex);
+
+	d_data->updating.fetch_add(1);
+	struct ClearUpdating
+	{
+		std::atomic<int>& count;
+		~ClearUpdating() { count.fetch_sub(1); }
+	} clear_updating{ d_data->updating };
 
 	// First step: if the schedule strategy is not Asynchronous, update first the source processings.
 	if (!(d_data->parameters.schedule_strategies & Asynchronous)) {
@@ -3525,6 +3538,10 @@ bool VipProcessingObject::update(bool force_run)
 			// Even in synchroneous mode, launch the processing through the task pool.
 			// This ensures that the processing always runs in the same thread (which might be of importance for a few processings).
 			d_data->createPool(this)->push();
+			// Released before the wait: this is a spinlock, and the wait lasts as
+			// long as the processing, so anything else calling update() on this
+			// object burnt a core for that whole time.
+			update_locker.unlock();
 			wait(false); // wait for the result
 		}
 	}
@@ -3537,7 +3554,7 @@ bool VipProcessingObject::update(bool force_run)
 
 bool VipProcessingObject::reload()
 {
-	if (this->scheduledUpdates() < 2 && !d_data->update_mutex.is_locked())
+	if (this->scheduledUpdates() < 2 && !this->isUpdating())
 		return this->update(true);
 	return false;
 }
@@ -3555,7 +3572,7 @@ void VipProcessingObject::reset()
 
 bool VipProcessingObject::isUpdating() const
 {
-	return d_data->update_mutex.is_locked();
+	return d_data->updating.load(std::memory_order_relaxed) > 0;
 }
 
 bool VipProcessingObject::wait(bool wait_for_sources, int max_milli_time)
@@ -3631,13 +3648,17 @@ bool VipProcessingObject::wait(bool wait_for_sources, int max_milli_time)
 		}
 	}
 	else if (VipIODevice* dev = qobject_cast<VipIODevice*>(this)) {
-		// wait for the device to read its current data
-		qint64 time = dev->time();
+		// Wait for the device to read its current data. The device offers nothing
+		// to block on, so this polls; what it must not do is poll for ever when no
+		// deadline was asked for, which is the default.
+		const qint64 default_max_milli_time = 30000;
+		const qint64 deadline = start + (max_milli_time > 0 ? max_milli_time : default_max_milli_time);
+		const qint64 time = dev->time();
 		while (dev->isReading() && dev->time() == time) {
-			if (max_milli_time > 0) {
-				qint64 remaining = max_milli_time - (QDateTime::currentMSecsSinceEpoch() - start);
-				if (remaining < 0)
-					return false;
+			if (QDateTime::currentMSecsSinceEpoch() > deadline) {
+				if (max_milli_time <= 0)
+					VIP_LOG_WARNING("Device still reading after 30s, stop waiting for it");
+				return false;
 			}
 			vipSleep(1);
 		}

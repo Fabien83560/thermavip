@@ -25,18 +25,21 @@
 #include <ctime>
 #endif
 
-/// Processor time charged to the whole process, in milliseconds. A wait that
+/// Processor time charged to the calling thread, in milliseconds. A wait that
 /// sleeps leaves it flat; a wait that spins makes it follow the clock.
 static qint64 processorMilliseconds()
 {
 #ifdef _WIN32
 	FILETIME creation, exited, kernel, user;
-	if (!GetProcessTimes(GetCurrentProcess(), &creation, &exited, &kernel, &user))
+	if (!GetThreadTimes(GetCurrentThread(), &creation, &exited, &kernel, &user))
 		return 0;
 	const auto toMs = [](const FILETIME& f) { return ((static_cast<qint64>(f.dwHighDateTime) << 32) | f.dwLowDateTime) / 10000; };
 	return toMs(kernel) + toMs(user);
 #else
-	return static_cast<qint64>(std::clock()) * 1000 / CLOCKS_PER_SEC;
+	timespec ts;
+	if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0)
+		return 0;
+	return static_cast<qint64>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
 #endif
 }
 
@@ -1062,6 +1065,41 @@ private Q_SLOTS:
 		QVERIFY2(processor * 2 < elapsed, qPrintable(QString("%1 ms of processor time for %2 ms of wait").arg(processor).arg(elapsed)));
 
 		QVERIFY(proc.wait(false, 30000));
+	}
+
+	/// update() took a spinlock and kept it across the wait for the result, so a
+	/// second call from another thread span on it for the whole processing. The
+	/// lock is now released before that wait, and what an update in flight is
+	/// answered by a counter rather than by the state of the lock.
+	void aSecondUpdateDoesNotSpinOnTheFirst()
+	{
+		SlowProcessing proc;
+		proc.setComputeTimeStatistics(false);
+		proc.inputAt(0)->setData(makeData(1.0));
+
+		std::atomic<bool> updatingSeen{ false };
+		QThread* first = QThread::create([&]() {
+			proc.update(true);
+		});
+		first->start();
+
+		// Let the first call reach its wait.
+		QThread::msleep(100);
+		updatingSeen = proc.isUpdating();
+
+		const qint64 processorBefore = processorMilliseconds();
+		QElapsedTimer timer;
+		timer.start();
+		proc.update(true);
+		const qint64 elapsed = timer.elapsed();
+		const qint64 processor = processorMilliseconds() - processorBefore;
+
+		QVERIFY(first->wait(30000));
+		delete first;
+
+		QVERIFY2(updatingSeen.load(), "an update waiting for its result is still an update in flight");
+		QVERIFY2(elapsed >= 200, qPrintable(QString("the second update returned after %1 ms").arg(elapsed)));
+		QVERIFY2(processor * 4 < elapsed, qPrintable(QString("%1 ms of processor time for %2 ms of update").arg(processor).arg(elapsed)));
 	}
 };
 

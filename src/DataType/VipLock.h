@@ -184,7 +184,21 @@ public:
 	// copied lock: the two lock classes of this header delete their copy too.
 	VipUniqueLock(const VipUniqueLock&) = delete;
 	VipUniqueLock& operator=(const VipUniqueLock&) = delete;
-	~VipUniqueLock() { d_lock->unlock(); }
+	~VipUniqueLock()
+	{
+		if (d_lock)
+			d_lock->unlock();
+	}
+
+	/// @brief Release before the end of the scope, for a section that must not
+	/// hold the lock across a blocking call.
+	void unlock()
+	{
+		if (d_lock) {
+			d_lock->unlock();
+			d_lock = nullptr;
+		}
+	}
 };
 
 template<class Lock>
