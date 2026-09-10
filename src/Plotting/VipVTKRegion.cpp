@@ -556,6 +556,7 @@ QVector<QPair<QString, QVariant>> vipBuildRegionAttributes(const VipVTKRegion& r
 		const auto& regions = it.value();
 		double min = vipNan(), max = vipNan(), mean = vipNan();
 		qint64 count = 0;
+		bool seen = false;
 
 		for (const auto& region : regions) {
 			VipVTKObject obj = region.object;
@@ -565,21 +566,32 @@ QVector<QPair<QString, QVariant>> vipBuildRegionAttributes(const VipVTKRegion& r
 				if (array->IsA("vtkDataArray") && array->GetNumberOfComponents() == 1) {
 					vtkDataArray* ar = static_cast<vtkDataArray*>(array);
 					for (auto id : region.region.pointIds) {
-						if (vipIsNan(min))
-							min = max = mean = ar->GetTuple1(id);
+						// A separate flag, and NaN skipped: NaN was the not-initialised marker
+						// and it is also how a missing value arrives in a scientific array. A
+						// first sample that was NaN made the loop take the first-element branch
+						// every turn, so the statistic ended up being the last sample while the
+						// count kept growing.
+						const double v = ar->GetTuple1(id);
+						if (vipIsNan(v))
+							continue;
+						if (!seen) {
+							min = max = v;
+							mean = 0;
+							seen = true;
+						}
 						else {
-							double v = ar->GetTuple1(id);
 							min = std::min(min, v);
 							max = std::max(max, v);
-							mean += v;
 						}
+						mean += v;
 						++count;
 					}
 				}
 			}
 		}
 
-		mean /= count;
+		if (count)
+			mean /= count;
 		map.push_back({ name + " min", (min) });
 		map.push_back({ name + " max", (max) });
 		map.push_back({ name + " mean", (mean) });
@@ -591,6 +603,7 @@ QVector<QPair<QString, QVariant>> vipBuildRegionAttributes(const VipVTKRegion& r
 		const auto& regions = it.value();
 		double min = vipNan(), max = vipNan(), mean = vipNan();
 		qint64 count = 0;
+		bool seen = false;
 
 		for (const auto& region : regions) {
 			VipVTKObject obj = region.object;
@@ -600,21 +613,32 @@ QVector<QPair<QString, QVariant>> vipBuildRegionAttributes(const VipVTKRegion& r
 				if (array->IsA("vtkDataArray") && array->GetNumberOfComponents() == 1) {
 					vtkDataArray* ar = static_cast<vtkDataArray*>(array);
 					for (auto id : region.region.completeCellIds) {
-						if (vipIsNan(min))
-							min = max = mean = ar->GetTuple1(id);
+						// A separate flag, and NaN skipped: NaN was the not-initialised marker
+						// and it is also how a missing value arrives in a scientific array. A
+						// first sample that was NaN made the loop take the first-element branch
+						// every turn, so the statistic ended up being the last sample while the
+						// count kept growing.
+						const double v = ar->GetTuple1(id);
+						if (vipIsNan(v))
+							continue;
+						if (!seen) {
+							min = max = v;
+							mean = 0;
+							seen = true;
+						}
 						else {
-							double v = ar->GetTuple1(id);
 							min = std::min(min, v);
 							max = std::max(max, v);
-							mean += v;
 						}
+						mean += v;
 						++count;
 					}
 				}
 			}
 		}
 
-		mean /= count;
+		if (count)
+			mean /= count;
 		map.push_back({ name + " min", (min) });
 		map.push_back({ name + " max", (min) });
 		map.push_back({ name + " mean", (mean) });

@@ -1107,7 +1107,10 @@ VipArchive& operator>>(VipArchive& arch, VipPlotVTKObject* pl)
 {
 	QColor color = arch.read("color").value<QColor>();
 	QColor selectedColor = arch.read("selectedColor").value<QColor>();
-	QColor edgeColor = arch.read("color").value<QColor>();
+	// "edgeColor", which is the name the writer uses: this asked for "color" a second
+	// time, so the edge colour of a VTK object was replaced by its main colour on
+	// every session reload and the value written was never read back.
+	QColor edgeColor = arch.read("edgeColor").value<QColor>();
 	bool edgeVisible = arch.read("edgeVisible").value<bool>();
 	double opacity = arch.read("opacity").value<double>();
 	int layer = arch.read("layer").value<int>();
