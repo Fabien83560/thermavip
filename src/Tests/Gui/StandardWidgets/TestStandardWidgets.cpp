@@ -6,6 +6,9 @@
 
 #include "vip_test_main.h"
 
+#include "VipGenericDevice.h"
+#include <QFileInfo>
+
 #include "VipStandardWidgets.h"
 
 #include <QLineEdit>
@@ -59,6 +62,29 @@ private Q_SLOTS:
 		bounded.setSingleStep(0.5);
 		bounded.setValue(2.5);
 		QCOMPARE(bounded.value(), 2.5);
+	}
+
+	/// The date prefixed name of a recording is built from the directory of the
+	/// path. That directory used to be rebuilt by removing a substring from the
+	/// raw path: on a path with backslashes nothing was removed, so the output
+	/// directory was the file itself and the recording was lost without a word;
+	/// and on a path whose directory carries the name of the file, both
+	/// occurrences went and the file landed one level up.
+	void theGeneratedRecordingNameStaysInItsDirectory()
+	{
+		VipGenericRecorder recorder;
+		recorder.setDatePrefix("yyyy.MM.dd");
+		recorder.setHasDatePrefix(true);
+
+		recorder.setPath("C:\\data\\run.h5");
+		QString generated = recorder.generateFilename();
+		QVERIFY2(generated.endsWith("run.h5"), qPrintable(generated));
+		QVERIFY2(!generated.contains("run.h5/"), qPrintable(generated));
+		QCOMPARE(QFileInfo(generated).absolutePath(), QFileInfo("C:/data/run.h5").absolutePath());
+
+		recorder.setPath("/data/run.h5/run.h5");
+		generated = recorder.generateFilename();
+		QCOMPARE(QFileInfo(generated).absolutePath(), QFileInfo("/data/run.h5/run.h5").absolutePath());
 	}
 };
 

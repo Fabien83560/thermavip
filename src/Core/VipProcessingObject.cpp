@@ -619,8 +619,20 @@ VipConnectionPtr VipConnection::buildConnection(IOType, const QString& address, 
 
 	int index = address.indexOf(":");
 	if (index >= 0) {
-		QString class_name = address.mid(0, index);
-		QVariant v = vipCreateVariant((class_name + "*").toLatin1().data());
+		const QByteArray class_name = address.mid(0, index).toLatin1() + "*";
+
+		// The address comes from a session file. The class it names used to be
+		// instantiated straight away: the constructor of any registered type ran,
+		// and when the cast below gave nothing the object was simply leaked. Ask
+		// the type system what the class is before building one.
+		const QMetaType type = QMetaType::fromName(class_name);
+		const QMetaObject* meta = type.metaObject();
+		if (!meta || !meta->inherits(&VipConnection::staticMetaObject)) {
+			VIP_LOG_ERROR("Refused a connection address naming " + QString::fromLatin1(class_name) + ", which is not a connection");
+			return VipConnectionPtr();
+		}
+
+		QVariant v = vipCreateVariant(class_name.data());
 		VipConnectionPtr c(v.value<VipConnection*>());
 		if (c) {
 			c->setupConnection(address);
@@ -3283,7 +3295,16 @@ QTransform VipProcessingObject::imageTransform() const
 
 	QTransform tr;
 	if (from_center) {
-		QTransform inv = img.inverted();
+		// A matrix that cannot be inverted gives the identity back and raises a
+		// flag nobody read: the composition below then reported a transform that
+		// does not describe what the processing did, and the regions of interest
+		// were placed with it.
+		bool invertible = false;
+		QTransform inv = img.inverted(&invertible);
+		if (!invertible) {
+			VIP_LOG_WARNING("Image transform of " + objectName() + " cannot be inverted: no transform is reported");
+			return QTransform();
+		}
 		QPointF translate_back;
 		translate_back = inv.map(QPointF(after.shape(1) / 2., after.shape(0) / 2.));
 
@@ -5515,11 +5536,42 @@ void serialize_VipDataListManager(VipArchive& arch)
 			// them anyway reset the whole process to a zero list limit and an
 			// empty priority map.
 			if (!has_error && !VipProcessingManager::instance().d_data->_lock_list_manager) {
-				VipProcessingManager::setListLimitType(limit_type);
-				VipProcessingManager::setMaxListSize(max_list_size);
-				VipProcessingManager::setMaxListMemory(max_memory);
+				// These values come from a file and are applied to every input queue
+				// of the process and to the priority of every processing thread. They
+				// were passed on as they stood: a limit type outside the enumeration
+				// switched eviction off and every queue then grew without bound, a
+				// size of zero emptied each queue on every push, and a priority
+				// outside the enumeration reached QThread::setPriority.
+				const int known_limits = VipDataList::None | VipDataList::Number | VipDataList::MemorySize;
+				if ((limit_type & ~known_limits) == 0 && max_list_size > 0 && max_memory > 0) {
+					VipProcessingManager::setListLimitType(limit_type);
+					VipProcessingManager::setMaxListSize(max_list_size);
+					VipProcessingManager::setMaxListMemory(max_memory);
+				}
+				else
+					VIP_LOG_WARNING("Refused the queue limits of the session: they are outside what the program accepts");
+
 				VipProcessingManager::setLogErrors(logErrors);
-				VipProcessingManager::setDefaultPriorities(prio);
+
+				PriorityMap accepted;
+				for (PriorityMap::const_iterator it = prio.begin(); it != prio.end(); ++it) {
+					switch (it.value()) {
+						case QThread::IdlePriority:
+						case QThread::LowestPriority:
+						case QThread::LowPriority:
+						case QThread::NormalPriority:
+						case QThread::HighPriority:
+						case QThread::HighestPriority:
+						case QThread::TimeCriticalPriority:
+						case QThread::InheritPriority:
+							accepted.insert(it.key(), it.value());
+							break;
+						default:
+							VIP_LOG_WARNING("Refused the thread priority of the session for " + it.key() + ": it is not one of the values the program defines");
+							break;
+					}
+				}
+				VipProcessingManager::setDefaultPriorities(accepted);
 			}
 
 			arch.end();

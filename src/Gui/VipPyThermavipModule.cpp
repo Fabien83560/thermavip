@@ -513,12 +513,25 @@ static QVariant clampTime(const VipNDArray & ar, qint64 min, qint64 max)
 	if (ar.isEmpty())
 		return QVariant::fromValue(VipNDArray());
 
-	int size = ar.shape(1);
-	const vip_double *xptr = (const vip_double*)ar.constData();
+	// The array comes from Python. Its rank was never checked, so shape(1) on a
+	// one dimensional array read past the shape vector and gave an arbitrary
+	// size; and its buffer was reinterpreted as vip_double whatever it held, so
+	// an array of four byte elements gave twice its length in reads past the end
+	// of the block, and what was read came back to the caller. Convert, which is
+	// what every other function of this file does.
+	if (ar.shapeCount() != 2 || ar.shape(0) != 2)
+		return error("clamp_time expects an array of shape 2xN");
+
+	const VipNDArrayType<vip_double, 2> in = ar;
+	if (in.isEmpty())
+		return error("clamp_time cannot read this array as numbers");
+
+	const qsizetype size = in.shape(1);
+	const vip_double *xptr = in.ptr();
 	const vip_double *yptr = xptr + size;
 
 
-	for (int i = 1; i <size; ++i) {
+	for (qsizetype i = 1; i <size; ++i) {
 		if (xptr[i] <= xptr[i - 1])
 			return error( "given signal is not continuous");
 	}
@@ -526,7 +539,7 @@ static QVariant clampTime(const VipNDArray & ar, qint64 min, qint64 max)
 	QVector<vip_double> x, y;
 	x.reserve(size);
 	y.reserve(size);
-	int i = 0;
+	qsizetype i = 0;
 	while (i < size && xptr[i] < min) ++i;
 	while (i < size && xptr[i] <= max) {
 		x.append(xptr[i]);

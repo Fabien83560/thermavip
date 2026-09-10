@@ -139,16 +139,30 @@ namespace detail
 		for (QMap<QString, VipNDArray>::const_iterator it = arrays.begin(); it != arrays.end(); ++it) {
 			o << it.key() << it.value().mid(_start, _shape);
 		}
-		return o << arrays;
+		// One representation, not two. The whole table used to be written again
+		// here, undivided, on top of the loop above: the file held the content
+		// twice and the reader below consumed only the first, so everything
+		// serialised after an array of this kind was read from the wrong offset.
+		return o;
 	}
 
 	QDataStream& MultiNDArrayHandle::istream(const VipNDArrayShape&, const VipNDArrayShape&, QDataStream& i)
 	{
+		// The count comes from the file and used to size the loop as it stood: a
+		// field of a few billion turned into that many turns, each reading an empty
+		// name from an exhausted stream, and the state of that stream was never
+		// looked at.
+		static constexpr qsizetype max_arrays = 4096;
+
 		QString c;
 		arrays.clear();
 		qsizetype _size = 0;
 		i >> c >> _size;
-		for (qsizetype s = 0; s < _size; ++s) {
+		if (_size < 0 || _size > max_arrays) {
+			i.setStatus(QDataStream::ReadCorruptData);
+			return i;
+		}
+		for (qsizetype s = 0; s < _size && i.status() == QDataStream::Ok; ++s) {
 			QString name;
 			VipNDArray ar;
 			i >> name >> ar;

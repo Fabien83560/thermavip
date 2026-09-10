@@ -32,6 +32,7 @@
 #include <qboxlayout.h>
 
 #include "VipDisplayArea.h"
+#include "VipLogging.h"
 #include "VipProgress.h"
 #include "VipWebBrowser.h"
 #include "VipSearchLineEdit.h"
@@ -148,17 +149,24 @@ public:
 
 protected:
 
+	// Refused, and said out loud. This used to accept every certificate error
+	// without a word: self signed, expired, wrong host name, unknown authority.
+	// Anything on the path could then serve any content under an https address,
+	// and this window bridges to openPaths through the thermavip scheme. A list
+	// of hosts the user has explicitly approved is the way to allow one of them
+	// back, and it has to be a deliberate action, not a default.
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-	void receiveCertificateError(const QWebEngineCertificateError& error) 
+	void receiveCertificateError(const QWebEngineCertificateError& error)
 	{
-		const_cast<QWebEngineCertificateError&>(error).acceptCertificate();
+		QWebEngineCertificateError& mutableError = const_cast<QWebEngineCertificateError&>(error);
+		VIP_LOG_WARNING("TLS certificate rejected for " + mutableError.url().host() + ": " + mutableError.description());
+		mutableError.rejectCertificate();
 	}
 #else
 	virtual bool certificateError(const QWebEngineCertificateError& error) override
 	{
-		QWebEngineCertificateError& mutableError = const_cast<QWebEngineCertificateError&>(error);
-		mutableError.ignoreCertificateError();
-		return true;
+		VIP_LOG_WARNING("TLS certificate rejected for " + error.url().host() + ": " + error.errorDescription());
+		return false;
 	}
 #endif
 

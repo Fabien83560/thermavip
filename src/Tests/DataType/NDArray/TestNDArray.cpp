@@ -17,6 +17,8 @@
 #include "VipNDArrayStatistics.h"
 #include "VipStack.h"
 #include "VipConvolve.h"
+#include <QTemporaryFile>
+#include <QDir>
 #include "VipEval.h"
 
 #include <vector>
@@ -163,6 +165,36 @@ private Q_SLOTS:
 			if (together[i] != alone[i])
 				++different;
 
+		QCOMPARE(different, (qsizetype)0);
+	}
+
+	/// The automatic detection of the file format read two qsizetype, sixteen
+	/// bytes, for a header of two int, eight bytes: the pair it tested was never
+	/// the pair that had been written, no handle matched, and every binary file
+	/// was taken for text.
+	void aBinaryArrayFileIsRecognisedAsBinary()
+	{
+		VipNDArrayType<double> source(vipVector(3, 4));
+		for (qsizetype i = 0; i < source.size(); ++i)
+			source[i] = static_cast<double>(i) + 0.5;
+
+		QTemporaryFile file(QDir::tempPath() + "/vip_array_XXXXXX.dat");
+		QVERIFY(file.open());
+		const QString path = file.fileName();
+		file.close();
+
+		QVERIFY(VipNDArray(source).save(path.toLatin1().data(), VipNDArray::Binary));
+
+		VipNDArray read;
+		QVERIFY2(read.load(path.toLatin1().data()), "a binary array file must load without being told its format");
+		QCOMPARE(read.shape(), vipVector(3, 4));
+
+		VipNDArrayType<double> back = read.toDouble();
+		QCOMPARE(back.size(), source.size());
+		qsizetype different = 0;
+		for (qsizetype i = 0; i < back.size(); ++i)
+			if (back[i] != source[i])
+				++different;
 		QCOMPARE(different, (qsizetype)0);
 	}
 

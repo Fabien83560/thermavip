@@ -10,6 +10,7 @@
 #include "VipLogging.h"
 
 #include <qrandom.h>
+#include <qregularexpression.h>
 #include <qsharedmemory.h>
 #include <qdatetime.h>
 #include <qdatastream.h>
@@ -50,6 +51,14 @@ typedef union MemHeader
 	};
 	char reserved[64];
 } MemHeader;
+
+// True when the string can name a Python object, which is what the generated
+// code below expects: anything else used to be spliced into that code.
+static bool vipIsPythonIdentifier(const QString& name)
+{
+	static const QRegularExpression identifier(QStringLiteral("\\A[A-Za-z_][A-Za-z0-9_]{0,63}\\z"));
+	return identifier.match(name).hasMatch();
+}
 
 // Integer to (little endian) QByteArray
 static QByteArray toBinary(int value)
@@ -113,13 +122,25 @@ public:
 			// read an existing shared memory
 			d_mem.lock();
 			memcpy(&d_header, d_mem.data(), sizeof(d_header));
-			if (false) { //++d_header.connected > 2) {
+
+			// The five values come from a segment any process of the session can
+			// write. They were adopted as they stood and then used as offsets and
+			// lengths by memcpy, so a header that says the wrong thing reads and
+			// writes outside the mapping.
+			const int mapped = d_mem.size();
+			const int header_size = static_cast<int>(sizeof(d_header));
+			const bool sane = d_header.size == mapped && d_header.max_msg_size > 0 && d_header.max_msg_size <= mapped - header_size - 16 &&
+					  d_header.offset_read >= header_size && d_header.offset_write >= header_size &&
+					  d_header.offset_read <= mapped - 8 - d_header.max_msg_size && d_header.offset_write <= mapped - 8 - d_header.max_msg_size &&
+					  d_header.offset_read != d_header.offset_write;
+			if (!sane) {
 				d_mem.unlock();
 				d_mem.detach();
-				vip_debug("error: shared memory already in use");
-				VIP_LOG_ERROR("error: shared memory already in use");
+				vip_debug("error: shared memory header is not usable");
+				VIP_LOG_ERROR("error: shared memory header is not usable");
 				return;
 			}
+
 			memcpy(d_mem.data(), &d_header, sizeof(d_header));
 			// invert read and write offset if not main
 			if (!is_main)
@@ -274,10 +295,28 @@ public:
 	{
 		if (error)
 			error->clear();
+		// The name used to be pasted into the source three times, and the third
+		// one sat in expression position: a caller passing an expression instead
+		// of a name had it evaluated here, in this process. It is checked against
+		// what an identifier may be and then sent as an object; the value is
+		// looked up in the globals rather than spliced into the code.
+		if (!vipIsPythonIdentifier(name)) {
+			if (error)
+				*error = "invalid object name";
+			VIP_LOG_ERROR("Refused an object name that is not an identifier");
+			return false;
+		}
+
+		if (!d_loc.sendObject("__name", QVariant::fromValue(name)).value().value<VipPyError>().isNull()) {
+			if (error)
+				*error = "cannot send the object name";
+			return false;
+		}
+
 		QString code = "import pickle\n"
 			       "import struct\n"
-			       "__res = b'" SH_OBJECT "' +struct.pack('i',len('" +
-			       name + "')) + b'" + name + "' + pickle.dumps(" + name + ")";
+			       "__nb = __name.encode()\n"
+			       "__res = b'" SH_OBJECT "' + struct.pack('i',len(__nb)) + __nb + pickle.dumps(globals()[__name])";
 
 		VipPyError err = d_loc.execCode(code).value().value<VipPyError>();
 		if (!err.isNull()) {
@@ -313,10 +352,28 @@ public:
 			return false;
 		}
 
+		// The name used to be pasted into the source three times, and the third
+		// one sat in expression position: a caller passing an expression instead
+		// of a name had it evaluated here, in this process. It is checked against
+		// what an identifier may be and then sent as an object; the value is
+		// looked up in the globals rather than spliced into the code.
+		if (!vipIsPythonIdentifier(name)) {
+			if (error)
+				*error = "invalid object name";
+			VIP_LOG_ERROR("Refused an object name that is not an identifier");
+			return false;
+		}
+
+		if (!d_loc.sendObject("__name", QVariant::fromValue(name)).value().value<VipPyError>().isNull()) {
+			if (error)
+				*error = "cannot send the object name";
+			return false;
+		}
+
 		QString code = "import pickle\n"
 			       "import struct\n"
-			       "__res = b'" SH_OBJECT "' +struct.pack('i',len('" +
-			       name + "')) + b'" + name + "' + pickle.dumps(" + name + ")";
+			       "__nb = __name.encode()\n"
+			       "__res = b'" SH_OBJECT "' + struct.pack('i',len(__nb)) + __nb + pickle.dumps(globals()[__name])";
 
 		err = d_loc.execCode(code).value().value<VipPyError>();
 		if (!err.isNull()) {
@@ -474,11 +531,34 @@ protected:
 					if (!s1 || !s2 || !s3) {
 						continue;
 					}
+					// The three lengths come from the segment and used to size the
+					// buffers below as they stood: a negative one is undefined and a
+					// large one asks for an allocation the message cannot hold. The
+					// header already carries the bound the writer applies.
+					const int max_len = d_header.max_msg_size;
+					if (s1 < 0 || s2 < 0 || s3 < 0 || s1 > max_len || s2 > max_len || s3 > max_len || s1 + s2 + s3 > max_len) {
+						VIP_LOG_ERROR("Refused a message whose declared lengths do not fit");
+						continue;
+					}
 					// send pickle versions of variables. name is already the ascii function name.
 					QByteArray name(s1, 0), targs(s2, 0), dargs(s3, 0);
 					str.readRawData(name.data(), name.size());
 					str.readRawData(targs.data(), targs.size());
 					str.readRawData(dargs.data(), dargs.size());
+					// The name arrives from the segment. Pasted between quotes in
+					// the source below, a single apostrophe in it closed the literal
+					// and the rest ran as Python, in this process, with its rights.
+					// It is checked against what an identifier may be, then sent as
+					// an object like the arguments.
+					static const QRegularExpression identifier(QStringLiteral("\\A[A-Za-z_][A-Za-z0-9_]{0,63}\\z"));
+					const QString fname = QString::fromLatin1(name);
+					if (!identifier.match(fname).hasMatch()) {
+						VIP_LOG_ERROR("Refused a function name that is not an identifier");
+						writeError("invalid function name", timeout);
+						continue;
+					}
+
+					d_loc.sendObject("__fname", fname);
 					d_loc.sendObject("__targs", targs);
 					d_loc.sendObject("__dargs", dargs);
 
@@ -486,9 +566,7 @@ protected:
 						       "import struct\n"
 						       "__targs = pickle.loads(__targs)\n"
 						       "__dargs = pickle.loads(__dargs)\n"
-						       //"__res = " + name + "(*__targs, **__dargs)\n";
-						       "__res = builtins.internal.call_internal_func('" +
-						       name + "', *__targs, **__dargs)";
+						       "__res = builtins.internal.call_internal_func(__fname, *__targs, **__dargs)";
 					VipPyError err = d_loc.execCode(code).value().value<VipPyError>();
 					if (!err.isNull()) {
 						vip_debug("%s\n", err.traceback.toLatin1().data());
@@ -683,10 +761,15 @@ qint64 VipIPythonShellProcess::start(int font_size, const QString& _style, const
 		QStringList lst;
 		lst << pdir + "/Library/bin" << pdir + "/bin" << pdir + "/condabin" << pdir + "/Scripts";
 
+		// Added to the PATH, not put in its place. The assignment threw away the
+		// one the process was given, so the child lost System32: the libraries the
+		// interpreter loads and every command the console runs afterwards were
+		// resolved against four directories. The separator prepared just below
+		// only makes sense in front of a concatenation.
 		QString path = env.value("PATH");
-		if (!path.endsWith(";"))
+		if (!path.isEmpty() && !path.endsWith(";"))
 			path += ";";
-		path = lst.join(";");
+		path += lst.join(";");
 		env.insert("PATH", path);
 		vip_debug("path: %s\n", path.toLatin1().data());
 	}

@@ -14,8 +14,11 @@
 #include "VipStandardProcessing.h"
 #include "VipStreamingFromDevice.h"
 #include "VipXmlArchive.h"
+#include "VipCore.h"
+#include "VipIterator.h"
 
 #include <atomic>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <QElapsedTimer>
@@ -136,6 +139,33 @@ public:
 		if (onSourceProperty)
 			onSourceProperty();
 		VipProcessingObject::setSourceProperty(name, value);
+	}
+
+protected:
+	void apply() override { outputAt(0)->setData(create(inputAt(0)->data().data())); }
+};
+
+/// Reports an image transform of its own and passes the image through, so the
+/// composition done by the base class can be measured.
+class TransformingProcessing : public VipProcessingObject
+{
+	Q_OBJECT
+	VIP_IO(VipInput input)
+	VIP_IO(VipOutput output)
+
+public:
+	QTransform transform;
+
+	TransformingProcessing(QObject* parent = nullptr)
+	  : VipProcessingObject(parent)
+	{
+	}
+
+	using VipProcessingObject::imageTransform;
+	QTransform imageTransform(bool* from_center) const override
+	{
+		*from_center = true;
+		return transform;
 	}
 
 protected:
@@ -1374,6 +1404,88 @@ private Q_SLOTS:
 		delete sender;
 
 		QVERIFY2(sends.load() > 0, "the sender must have run");
+	}
+
+	/// The transform reported for an image is composed from the one the
+	/// processing declares, recentred on the middle of the image before and
+	/// after. Nothing measured that composition, and the inversion it needs was
+	/// called without ever consulting the flag that says whether it succeeded: a
+	/// matrix that cannot be inverted gives the identity back, and the result was
+	/// then a transform that describes nothing.
+	void theComposedImageTransformMatchesItsReference()
+	{
+		TransformingProcessing proc;
+		proc.setComputeTimeStatistics(false);
+		proc.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::NoThread);
+
+		VipNDArrayType<double> image(vipVector(4, 6));
+		image.fill(1.);
+
+		proc.transform = QTransform().rotate(90) * QTransform().scale(2, 2);
+		proc.inputAt(0)->setData(VipAnyData(QVariant::fromValue(VipNDArray(image)), 0));
+		QVERIFY(proc.update(true));
+
+		// Composed by hand from the same definition: centre on the input, apply,
+		// then translate back by the centre of the output taken through the
+		// inverse.
+		QTransform expected;
+		const QTransform inv = proc.transform.inverted();
+		const QPointF back = inv.map(QPointF(6 / 2., 4 / 2.));
+		expected.translate(-6 / 2., -4 / 2.);
+		expected *= proc.transform;
+		expected.translate(back.x(), back.y());
+
+		const QTransform got = proc.imageTransform();
+		const double tolerance = 1e-9;
+		QVERIFY2(std::abs(got.m11() - expected.m11()) < tolerance, "m11");
+		QVERIFY2(std::abs(got.m12() - expected.m12()) < tolerance, "m12");
+		QVERIFY2(std::abs(got.m21() - expected.m21()) < tolerance, "m21");
+		QVERIFY2(std::abs(got.m22() - expected.m22()) < tolerance, "m22");
+		QVERIFY2(std::abs(got.dx() - expected.dx()) < tolerance, "dx");
+		QVERIFY2(std::abs(got.dy() - expected.dy()) < tolerance, "dy");
+
+		// A matrix that cannot be inverted reports no transform rather than one
+		// built from an inversion that did not happen.
+		proc.transform = QTransform(0, 0, 0, 0, 0, 0);
+		QVERIFY(proc.update(true));
+		QVERIFY2(proc.imageTransform().isIdentity(), "a transform that cannot be inverted must report nothing");
+	}
+
+	/// The block of a session file sets the queue limits of every input of the
+	/// process and the priority of every processing thread. The five values were
+	/// applied as they stood: a limit type outside the enumeration switched
+	/// eviction off, so each queue grew without bound; a size of zero emptied
+	/// every queue on each push; and a priority outside the enumeration reached
+	/// QThread::setPriority.
+	void aSessionCannotImposeLimitsTheProgramDoesNotDefine()
+	{
+		const int limitType = VipProcessingManager::listLimitType();
+		const int maxSize = VipProcessingManager::maxListSize();
+		const qint64 maxMemory = VipProcessingManager::maxListMemory();
+		const int threads = vipIterateThreadCount();
+
+		PriorityMap bogus;
+		bogus["MultiplyByProperty"] = (QThread::Priority)12345;
+
+		VipXOStringArchive out;
+		QVERIFY(out.start("VipProcessingManager"));
+		out.content("arrayThreads", threads);
+		out.content("listLimitType", 0x40);
+		out.content("maxListSize", -5);
+		out.content("maxListMemory", (qint64)-1);
+		out.content("logErrors", VipProcessingManager::logErrors());
+		out.content("priorities", QVariant::fromValue(bogus));
+		out.end();
+
+		VipXIStringArchive in(out.toString());
+		vipRestoreSettings(in);
+
+		QCOMPARE(VipProcessingManager::listLimitType(), limitType);
+		QCOMPARE(VipProcessingManager::maxListSize(), maxSize);
+		QCOMPARE(VipProcessingManager::maxListMemory(), maxMemory);
+		QCOMPARE((int)VipProcessingManager::defaultPriority(&MultiplyByProperty::staticMetaObject), (int)QThread::InheritPriority);
+
+		vipSetIterateThreadCount(threads);
 	}
 };
 

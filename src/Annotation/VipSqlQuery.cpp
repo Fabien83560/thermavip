@@ -94,9 +94,18 @@ static QString sepToStr(VipRequestCondition::Separator sep)
 }
 static QString addQuotes(const QString& str)
 {
-	if (!str.startsWith("'"))
-		return "'" + str + "'";
-	return str;
+	if (str.startsWith("'"))
+		return str;
+
+	// The value ends up inside a literal built by hand, so the quote that closes
+	// that literal has to be neutralised: it used to be added around the value as
+	// it stood, and a single apostrophe closed the literal and left the rest of
+	// the value as SQL. The backslash goes with it, since the driver reads it as
+	// an escape by default and a trailing one would carry the closing quote away.
+	QString escaped = str;
+	escaped.replace("\\", "\\\\");
+	escaped.replace("'", "''");
+	return "'" + escaped + "'";
 }
 
 QString vipFormatRequestCondition(const VipRequestCondition& c)
@@ -1716,7 +1725,11 @@ QMap<QString, QMap<Vip_experiment_id, QMap<QString, QMap<QString, VipPointVector
 							if (opts.maxY)
 								maxY = lst[i].attribute("max_T_image_position_y").toInt();
 						}
-						if (_min > min) {
+						// Lower, not higher: copied from the block just above without the
+						// operator being turned round, this kept the largest of the minima
+						// and published it as the minimum, with the position of the wrong
+						// shape beside it.
+						if (_min < min) {
 							min = _min;
 							if (opts.minX)
 								minX = lst[i].attribute("min_T_image_position_x").toInt();

@@ -1865,6 +1865,17 @@ void VipPlayerDBAccess::uploadInternal(bool show_messages)
 	// compute the list of ids that needs to be removed from the DB
 	for (QMap<qint64, qint64>::const_iterator it = m_modifications.begin(); it != m_modifications.end(); ++it) {
 		if (m_initial_events.find(it.key()) != m_initial_events.end()) {
+			// An event still held here whose confidence is not above zero used to be
+			// deleted by this loop and refused by the one below, which sends only
+			// what is above zero: it was lost from the shared database, and the log
+			// said it had been removed. A removal the user actually asked for takes
+			// the event out of m_events, and that one still goes through.
+			Vip_event_list::const_iterator current = m_events.find(it.key());
+			if (current != m_events.end() && !current.value().isEmpty() && current.value().first().attribute("confidence").toDouble() <= 0) {
+				VIP_LOG_WARNING("Event ", it.key(), " is not sent back because its confidence is not above zero: its removal is cancelled");
+				continue;
+			}
+
 			// get flag
 			int origin = m_initial_events[it.key()].first().attribute("origin").toInt();
 			if (origin == DB) {
