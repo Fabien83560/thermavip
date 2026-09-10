@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cmath>
 #include <iostream>
 
@@ -22,7 +23,10 @@ class CurveStreaming : public QThread
 {
 	QList<VipPoint> points;
 	QList<VipPlotCurve*> curves;
-	bool stop;
+	// Atomic: written by the thread of the interface and read every turn by the
+	// thread below. A plain bool is a data race, and nothing forces the read to
+	// happen again, so the wait on shutdown could never return.
+	std::atomic<bool> stop;
 
 public:
 	CurveStreaming(const QList<VipPlotCurve*>& cs)
