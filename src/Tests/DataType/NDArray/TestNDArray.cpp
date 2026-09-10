@@ -21,6 +21,7 @@
 #include <QDir>
 #include "VipEval.h"
 
+#include <limits>
 #include <vector>
 
 class TestNDArray : public QObject
@@ -196,6 +197,55 @@ private Q_SLOTS:
 			if (back[i] != source[i])
 				++different;
 		QCOMPARE(different, (qsizetype)0);
+	}
+
+	/// Turning a double into text went through the number of digits a float
+	/// guarantees, six, so nine significant digits were dropped on the path every
+	/// value of the library takes to become text, and reading the text back did
+	/// not give the value.
+	void aDoubleTurnedIntoTextKeepsItsDigits()
+	{
+		VipNDArrayType<double> source(vipVector(1));
+		source[0] = 3.14159265358979;
+
+		VipNDArrayType<QString> text(vipVector(1));
+		QVERIFY(VipNDArray(source).convert(text));
+
+		bool ok = false;
+		const double back = text[0].toDouble(&ok);
+		QVERIFY2(ok, qPrintable(text[0]));
+		QVERIFY2(back == source[0], qPrintable(text[0]));
+	}
+
+	/// long and unsigned long are declared arithmetic and convertible, and the
+	/// histogram has branches for them, but no array handle was registered for
+	/// either: an array of long could not be created at all, and it said nothing.
+	void anArrayOfLongCanBeCreated()
+	{
+		VipNDArray longs(qMetaTypeId<long>(), vipVector(2, 3));
+		QVERIFY2(!longs.isNull(), "an array of long must exist");
+		QCOMPARE(longs.shape(), vipVector(2, 3));
+
+		VipNDArray ulongs(qMetaTypeId<unsigned long>(), vipVector(4));
+		QVERIFY2(!ulongs.isNull(), "an array of unsigned long must exist");
+		QCOMPARE(ulongs.size(), (qsizetype)4);
+	}
+
+	/// The eleven converters from long double to an integer cast without a bound.
+	/// A cast of a value outside the range of the destination is undefined, and
+	/// these are reached from any QVariant conversion, so a number read from a
+	/// file decided what happened.
+	void aLongDoubleOutOfRangeIsClampedNotUndefined()
+	{
+		QVariant big = QVariant::fromValue((vip_long_double)1e30L);
+		QVERIFY(big.canConvert<qint32>());
+		QCOMPARE(big.value<qint32>(), std::numeric_limits<qint32>::max());
+
+		QVariant lower = QVariant::fromValue((vip_long_double)-1e30L);
+		QCOMPARE(lower.value<qint32>(), std::numeric_limits<qint32>::lowest());
+
+		QVariant ordinary = QVariant::fromValue((vip_long_double)42.5L);
+		QCOMPARE(ordinary.value<qint32>(), 42);
 	}
 
 	/// The axis of a stack comes from the caller and is used as an index into a

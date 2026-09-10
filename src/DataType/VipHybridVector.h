@@ -275,7 +275,14 @@ struct VipHybridVector
 	void assign(const T& value) noexcept { fill(value); } // A synonym for fill
 	void fill(const T& value) noexcept { std::fill_n(elems, N, value); }
 
-	void resize(size_type) noexcept {}
+	// Fixed size: the only size this can be given is the one it has. It used to
+	// take any value and do nothing, so generic code written against the
+	// interface the two specialisations share believed it had resized.
+	void resize(size_type new_size) noexcept
+	{
+		VIP_ASSERT_DEBUG(new_size == (size_type)N, "cannot resize a vector of fixed size");
+		(void)new_size;
+	}
 
 	explicit operator bool() const noexcept { return true; }
 
