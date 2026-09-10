@@ -78,11 +78,13 @@ bool VipPyNPZDevice::open(VipIODevice::OpenModes mode)
 	if (mode != WriteOnly)
 		return false;
 
-	close();
-
+	// The path is checked before the previous recording is flushed and cleared: an
+	// open that ends up refusing the extension used to write and purge it first.
 	QString p = removePrefix(path());
 	if (!p.endsWith(".npz"))
 		return false;
+
+	close();
 
 	setOpenMode(mode);
 	return true;
@@ -260,11 +262,12 @@ bool VipPyMATDevice::open(VipIODevice::OpenModes mode)
 	if (mode != WriteOnly)
 		return false;
 
-	close();
-
+	// Same order as the NPZ device above.
 	QString p = removePrefix(path());
 	if (!p.endsWith(".mat"))
 		return false;
+
+	close();
 
 	setOpenMode(mode);
 	return true;
