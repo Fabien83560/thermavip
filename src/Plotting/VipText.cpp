@@ -41,6 +41,7 @@
 #include <QPicture>
 #include <QRawFont>
 #include <QTextLayout>
+#include <QMutex>
 #include <QTextStream>
 #include <qabstracttextdocumentlayout.h>
 #include <qapplication.h>
@@ -185,6 +186,11 @@ public:
 	{
 		const QString fontKey = font.key();
 
+		// Under a lock: this engine is built once and handed to every VipText, so two
+		// texts being painted at the same time share this map literally, and it is
+		// written from a const method. QMap is not reentrant for writing.
+		QMutexLocker lock(&d_ascentLock);
+
 		QMap<QString, int>::const_iterator it = d_ascentCache.find(fontKey);
 		if (it == d_ascentCache.end()) {
 			int ascent = findAscent(font);
@@ -230,6 +236,7 @@ private:
 	}
 
 	mutable QMap<QString, int> d_ascentCache;
+	mutable QMutex d_ascentLock;
 };
 
 //! Constructor

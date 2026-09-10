@@ -110,9 +110,13 @@ public:
 	}
 
 	std::atomic<bool> displayInProgress;
-	bool isDestruct;
+	// Atomic, like the flag above them: isDestruct is written by the destructor and
+	// read by apply() and display(), and visible is written in the graphics thread
+	// by checkVisibility() and read by apply() in the processing thread — the branch
+	// that posts checkVisibility() is the proof that the two differ.
+	std::atomic<bool> isDestruct;
 	bool formattingEnabled;
-	bool visible;
+	std::atomic<bool> visible;
 	bool first;
 	bool updateOnHidden;
 	bool empty = true;
@@ -145,8 +149,11 @@ VipDisplayObject::~VipDisplayObject()
 	if (inputAt(0)->connection()->source()) {
 		inputAt(0)->setEnabled(false);
 		this->clearInputBuffers();
-		//this->wait();
 	}
+	// Waited for, which the line above it asked for in a comment: a processing
+	// thread can be inside apply(), on the condition, while this private data is
+	// destroyed. The flag it tests is atomic now, so it does leave that loop.
+	this->wait(false);
 }
 
 void VipDisplayObject::checkVisibility()
@@ -221,16 +228,21 @@ void VipDisplayObject::apply()
 
 			// Wait for the display to end while processing events from the main event loop.
 			// This ensures that, whatever the display rate, the GUI remains responsive.
-			std::lock_guard<QMutex> ll(d_data->lock);
+			QMutexLocker<QMutex> ll(&d_data->lock);
 			while (d_data->displayInProgress.load(std::memory_order_relaxed) && !d_data->isDestruct) {
 				bool ret = d_data->cond.wait(&d_data->lock, 5);
 				qint64 current = QDateTime::currentMSecsSinceEpoch();
-				if ((current - time) > 50) {
+				const bool timed_out = (current - time) > 50;
+				if (timed_out || (!ret && buffer.size() > 1)) {
+					// The lock is released around it. processEvents() runs the event loop for
+					// up to a hundred millisecond, and the lock it used to hold is the one
+					// the display slot needs to say that it has finished.
+					ll.unlock();
 					processEvents();
-					break;
+					ll.relock();
 				}
-				else if (!ret && buffer.size() > 1)
-					processEvents();
+				if (timed_out)
+					break;
 			}
 		}
 	}
