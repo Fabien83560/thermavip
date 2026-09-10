@@ -830,7 +830,11 @@ public:
 	QList<QPointer<VipAdditionalInfo>> infos;
 
 	VipTimer timer;
+	// Written by the slot above and by the end of updateInfos(). It carried two
+	// meanings at once: the date of the last refresh, and a sentinel saying one is
+	// already scheduled. The two are separate now, and the shared one is atomic.
 	qint64 lastUpdate;
+	std::atomic<bool> updateScheduled{ false };
 
 	QPointer<VipPlotItem> delayedItem;
 
@@ -1012,7 +1016,11 @@ void VipProcessingObjectInfo::setProcessingObject(VipProcessingObject* obj, VipO
 		d_data->processing = obj;
 		d_data->output = output;
 
-		connect(d_data->processing.data(), SIGNAL(dataSent(VipProcessingIO*, const VipAnyData&)), this, SLOT(updateInfos(VipProcessingIO*, const VipAnyData&)), Qt::DirectConnection);
+		// Let Qt route it to the thread this widget lives in. Asked for directly,
+		// the slot ran in the thread of the task pool as soon as the source was
+		// asynchronous, and it reads the widget and writes the timestamp the
+		// interface writes too.
+		connect(d_data->processing.data(), SIGNAL(dataSent(VipProcessingIO*, const VipAnyData&)), this, SLOT(updateInfos(VipProcessingIO*, const VipAnyData&)));
 		updateInfos();
 	}
 }
@@ -1218,11 +1226,17 @@ void VipProcessingObjectInfo::updateInfos(VipProcessingIO* out, const VipAnyData
 	d_data->timer.start();
 
 	// if last update is older than 200ms and and update in not in progress, update
-	if (d_data->lastUpdate < 0)
+	if (d_data->updateScheduled.load(std::memory_order_relaxed))
 		return;
 
 	if (QDateTime::currentMSecsSinceEpoch() - d_data->lastUpdate > 200) {
-		d_data->lastUpdate = -1;
+		// Exchanged, not tested then set: two data arriving at once both scheduled
+		// an update. And the sentinel used to be cleared only at the very end of
+		// updateInfos(), which returns early on four conditions: once it took one
+		// of them, the immediate refresh was dead for the life of the process.
+		bool expected = false;
+		if (!d_data->updateScheduled.compare_exchange_strong(expected, true))
+			return;
 		d_data->timer.stop();
 		QMetaObject::invokeMethod(this, "updateInfos", Qt::QueuedConnection);
 	}
@@ -1240,6 +1254,13 @@ static bool Filter(const QString& name, const QVector<QString>& filters)
 
 void VipProcessingObjectInfo::updateInfos()
 {
+	// Cleared however this returns, including the four early exits below.
+	struct ClearScheduled
+	{
+		std::atomic<bool>& flag;
+		~ClearScheduled() { flag.store(false); }
+	} clear_scheduled{ d_data->updateScheduled };
+
 	if (d_data->plotting)
 		return;
 	if (!d_data->output)

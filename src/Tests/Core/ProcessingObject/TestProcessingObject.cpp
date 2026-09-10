@@ -54,6 +54,17 @@ static qint64 processorMilliseconds()
 
 /// Multiplies its input by a property. Counts its invocations, which makes the
 /// scheduling observable.
+/// A processing whose output list can be resized, to reach the I/O change path.
+class MultiOutputProcessing : public VipProcessingObject
+{
+	Q_OBJECT
+	VIP_IO(VipInput input)
+	VIP_IO(VipMultiOutput outputs)
+
+protected:
+	void apply() override {}
+};
+
 class MultiplyByProperty : public VipProcessingObject
 {
 	Q_OBJECT
@@ -558,6 +569,71 @@ private Q_SLOTS:
 
 		QCOMPARE(target.size(), 0);
 		QVERIFY2(in.hasError(), "an out of range count must be reported, not consumed");
+	}
+
+	/// A negative count is the other end of the same field. It used to be a loop
+	/// bound taken as read, so it silently produced an empty list and no error.
+	void aNegativeCountInSessionIsRejected()
+	{
+		const QString xml = QStringLiteral(
+			"<list type_name=\"VipProcessingList*\">"
+			"<processing_name type_name=\"QString\"></processing_name>"
+			"<count type_name=\"qlonglong\">-5</count>"
+			"</list>");
+
+		VipProcessingList target;
+		VipXIStringArchive in(xml);
+		QVERIFY(in.isOpen());
+		in.content("list", &target);
+
+		QCOMPARE(target.size(), 0);
+		QVERIFY2(in.hasError(), "a negative count must be reported, not consumed");
+	}
+
+	/// A session naming a class the factory does not know must leave the list
+	/// empty and say so, not append a null or stop reading silently.
+	void aSessionNamingAnUnknownProcessingIsRefused()
+	{
+		const QString xml = QStringLiteral(
+			"<list type_name=\"VipProcessingList*\">"
+			"<processing_name type_name=\"QString\"></processing_name>"
+			"<count type_name=\"qlonglong\">1</count>"
+			"<processing type_name=\"NoSuchProcessingClass*\">"
+			"<processing_name type_name=\"QString\">ghost</processing_name>"
+			"</processing>"
+			"</list>");
+
+		VipProcessingList target;
+		VipXIStringArchive in(xml);
+		QVERIFY(in.isOpen());
+		in.content("list", &target);
+
+		QCOMPARE(target.size(), 0);
+		for (int i = 0; i < target.size(); ++i)
+			QVERIFY2(target.at(i), "a null processing must never be appended");
+	}
+
+	/// Every change of an I/O ran a full descent of the upstream graph, output ones
+	/// included, and an output cannot change the set of sources. Resizing a list of
+	/// outputs runs one such change per element added.
+	void anIoChangeOnAnOutputDoesNotWalkTheSources()
+	{
+		MultiplyByProperty upstream;
+		MultiOutputProcessing downstream;
+		downstream.inputAt(0)->setConnection(upstream.outputAt(0));
+
+		// Marks both nodes, which is what makes a later I/O change descend at all.
+		downstream.setSourceProperty("Probe", QVariant(1));
+		QCOMPARE(upstream.property("Probe").toInt(), 1);
+
+		upstream.setProperty("Probe", QVariant(2));
+
+		VipMultiOutput* outputs = downstream.topLevelOutputAt(0)->toMultiOutput();
+		QVERIFY(outputs);
+		outputs->resize(outputs->count() + 1);
+
+		// The source keeps what was written on it directly.
+		QCOMPARE(upstream.property("Probe").toInt(), 2);
 	}
 
 	/// Extracting an attribute as a number must accept a number and nothing
