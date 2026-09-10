@@ -1077,14 +1077,13 @@ QRectF VipLegend::preferredGeometry(const QRectF& bounding_rect, Qt::Alignment a
 {
 	QRectF legend_rect = bounding_rect;
 
-	double l = 0, r = 0, t = 0, b = 0;
-	this->getContentsMargins(&l, &t, &r, &b);
-
+	// The two functions called below already include the content margins of the
+	// layout, so adding them here counted them twice.
 	if (!(layout()->expandingDirections() & Qt::Vertical)) {
-		legend_rect.setHeight(layout()->heightForWidth(bounding_rect.width()) + t + b);
+		legend_rect.setHeight(layout()->heightForWidth(bounding_rect.width()));
 	}
 	if (!(layout()->expandingDirections() & Qt::Horizontal)) {
-		legend_rect.setWidth(layout()->maxRowWidth(layout()->columnsForWidth(bounding_rect.width())) + l + r);
+		legend_rect.setWidth(layout()->maxRowWidth(layout()->columnsForWidth(bounding_rect.width())));
 	}
 
 	if (align & Qt::AlignLeft) {

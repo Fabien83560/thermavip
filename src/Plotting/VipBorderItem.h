@@ -52,6 +52,14 @@ VIP_PLOTTING_EXPORT QPointF screenToSceneCoordinates(const QGraphicsScene* scene
 /// VipBorderItem supports defining an intersection value with another axis using
 /// VipBorderItem::setAxisIntersection() memeber.
 ///
+/// Name of the dynamic property carrying the position the area layout computed for
+/// an axis that intersects another. The literal it replaces was also used, in two
+/// other modules, for a data attribute holding something else entirely.
+inline const char* vipTheoricPosProperty()
+{
+	return "_vip_TheoricPos";
+}
+
 class VIP_PLOTTING_EXPORT VipBorderItem : public VipAbstractScale
 {
 	Q_OBJECT

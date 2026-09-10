@@ -3202,7 +3202,7 @@ public:
 						new_pos.setY(inter->position(item->axisIntersectionValue(), 0, item->axisIntersectionType()).y() + inter->pos().y());
 
 					// record the theoric 'good' position as a property
-					item->setProperty("_vip_Pos", QVariant::fromValue(new_pos));
+					item->setProperty(vipTheoricPosProperty(), QVariant::fromValue(new_pos));
 
 					// If axisIntersectionEnabled() is true, then the rect height (or width) is 0, we must set the right value to draw the title
 					double length;

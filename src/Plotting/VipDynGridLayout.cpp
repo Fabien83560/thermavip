@@ -336,11 +336,15 @@ double VipDynGridLayout::maxRowWidth(int numColumns) const
 		colWidth[col] = qMax(colWidth[col], d_data->itemSizeHints[int(index)].width());
 	}
 
-	double l = 0, r = 0;
-	//, t = 0, b = 0;
-	// this->getContentsMargins(&l,&t,&r,&b);
+	// Read, as the three other functions that need them do: this one decides the
+	// number of columns, and it compared a width that left the margins out against
+	// the width available, so it accepted one column more than they allow.
+	double l = 0, r = 0, t = 0, b = 0;
+	this->getContentsMargins(&l, &t, &r, &b);
 
-	int rowWidth = l + r + (numColumns - 1) * spacing();
+	// double, like the six other dimension accumulators of this file: an int
+	// truncated once per column, always downward.
+	double rowWidth = l + r + (numColumns - 1) * spacing();
 	for (col = 0; col < numColumns; col++)
 		rowWidth += colWidth[col];
 
@@ -487,9 +491,10 @@ QList<QRectF> VipDynGridLayout::layoutItems(const QRectF& rect, uint numColumns)
 	QVector<double> rowY(numRows);
 
 	const double xySpace = spacing();
-	double t = 0, l = 0;
-	// double l=0,r=0,t=0,b=0;
-	// this->getContentsMargins(&l,&t,&r,&b);
+	// Read here too: sizeHint() reserves l + r and t + b, and the first item used to
+	// be placed at the very edge of the rectangle whose size includes them.
+	double l = 0, r = 0, t = 0, b = 0;
+	this->getContentsMargins(&l, &t, &r, &b);
 
 	rowY[0] = yOffset + t;
 	for (uint ro = 1; ro < numRows; ro++)

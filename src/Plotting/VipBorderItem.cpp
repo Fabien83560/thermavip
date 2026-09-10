@@ -189,16 +189,20 @@ void VipBorderItem::emitScaleDivNeedUpdate()
 	if (VipBorderItem* inter = d_data->intersectWith) {
 		if (inter->parentItem() == this->parentItem()) {
 			// grab the theoric 'good' position computed in VipPlotWidget2D.cpp when recomputing the area geometry
-			QPointF theoric_pos = this->property("_vip_Pos").value<QPointF>();
+			QPointF theoric_pos = this->property(vipTheoricPosProperty()).value<QPointF>();
 
 			if (this->orientation() == Qt::Vertical) {
 				double x = inter->position(this->axisIntersectionValue(), 0, this->axisIntersectionType()).x() + inter->pos().x();
-				if (x != theoric_pos.x())
+				// Compared with a tolerance: this is the same three-term expression as the
+				// one the layout evaluates in another file, and an exact equality between
+				// two graphics transforms only answers sensibly while the two copies stay
+				// identical to the character.
+				if (!qFuzzyCompare(x, theoric_pos.x()))
 					emitGeometryNeedUpdate();
 			}
 			else {
 				double y = inter->position(this->axisIntersectionValue(), 0, this->axisIntersectionType()).y() + inter->pos().y();
-				if (y != theoric_pos.y())
+				if (!qFuzzyCompare(y, theoric_pos.y()))
 					this->emitGeometryNeedUpdate();
 			}
 		}
