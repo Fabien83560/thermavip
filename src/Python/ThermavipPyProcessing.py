@@ -28,7 +28,7 @@ class ThermavipPyProcessing:
         """Apply the processing for given data and time"""
         return data
         
-    def parameters():
+    def parameters(self):
         """Returns the processing parameters on the form dict{"name1":(type1,default_val1,min1,max1,step1), "name2":...)}
         or dict{"name1":(str,("default_value","val1","val2",...), "name2":...)} for enumerations.
         The only supported types are int, bool, float, str and other (an array comming from another player or edited manually by the user)
@@ -42,7 +42,7 @@ class ThermavipPyProcessing:
         """
         return dict()
         
-    def setParameters(**kwargs):
+    def setParameters(self,**kwargs):
         """Set the processing parameters as a dictionnary"""
         pass
         
@@ -157,7 +157,7 @@ class ThermavipPyDataFusionProcessing:
         """Apply the processing for given list of data and time"""
         return data_list[0]
         
-    def parameters():
+    def parameters(self):
         """Returns the processing parameters on the form dict{"name1":(type1,default_val1,min1,max1,step1), "name2":...)}
         or dict{"name1":(str,("default_value","val1","val2",...), "name2":...)} for enumerations.
         The only supported types are int, bool, float, str and other (an array comming from another player or edited manually by the user)
@@ -171,7 +171,7 @@ class ThermavipPyDataFusionProcessing:
         """
         return dict()
         
-    def setParameters(**kwargs):
+    def setParameters(self,**kwargs):
         """Set the processing parameters as a dictionnary"""
         pass
         

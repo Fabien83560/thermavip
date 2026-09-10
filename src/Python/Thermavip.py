@@ -1453,13 +1453,26 @@ def add_widget_to_player(player, widget, side):
     """
     Add a widget (from PySide2 or PyQt5) to a side of given player.
     side could be one of 'left', 'right', 'top', 'bottom'.
+
+    Only works from inside Thermavip: the native side must provide
+    'add_widget_to_player'. Raises AttributeError if it does not.
     """
-    import time
-    millis = int(round(time.time() * 1000))
+    import uuid
     oname = widget.objectName()
-    wname = str(millis)
+    # A unique name, where a millisecond timestamp gave two widgets added in the
+    # same millisecond the same one.
+    wname = '_vip_pywidget_' + uuid.uuid4().hex
+    add = getattr(builtins.internal, 'add_widget_to_player', None)
+    if add is None:
+        # The name used to be set first, so a call that could not work left the
+        # user's widget carrying a generated objectName and nothing restored it.
+        raise AttributeError("the native module does not provide 'add_widget_to_player'")
     widget.setObjectName(wname)
-    builtins.internal.add_widget_to_player(player, side, wname, oname,widget)
+    try:
+        add(player, side, wname, oname, widget)
+    except BaseException:
+        widget.setObjectName(oname)
+        raise
     widget.show()
 
 
