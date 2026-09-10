@@ -14,6 +14,8 @@
 #include "VipStandardProcessing.h"
 #include "VipStreamingFromDevice.h"
 #include "VipXmlArchive.h"
+#include "VipCore.h"
+#include "VipIterator.h"
 
 #include <atomic>
 #include <functional>
@@ -1374,6 +1376,43 @@ private Q_SLOTS:
 		delete sender;
 
 		QVERIFY2(sends.load() > 0, "the sender must have run");
+	}
+
+	/// The block of a session file sets the queue limits of every input of the
+	/// process and the priority of every processing thread. The five values were
+	/// applied as they stood: a limit type outside the enumeration switched
+	/// eviction off, so each queue grew without bound; a size of zero emptied
+	/// every queue on each push; and a priority outside the enumeration reached
+	/// QThread::setPriority.
+	void aSessionCannotImposeLimitsTheProgramDoesNotDefine()
+	{
+		const int limitType = VipProcessingManager::listLimitType();
+		const int maxSize = VipProcessingManager::maxListSize();
+		const qint64 maxMemory = VipProcessingManager::maxListMemory();
+		const int threads = vipIterateThreadCount();
+
+		PriorityMap bogus;
+		bogus["MultiplyByProperty"] = (QThread::Priority)12345;
+
+		VipXOStringArchive out;
+		QVERIFY(out.start("VipProcessingManager"));
+		out.content("arrayThreads", threads);
+		out.content("listLimitType", 0x40);
+		out.content("maxListSize", -5);
+		out.content("maxListMemory", (qint64)-1);
+		out.content("logErrors", VipProcessingManager::logErrors());
+		out.content("priorities", QVariant::fromValue(bogus));
+		out.end();
+
+		VipXIStringArchive in(out.toString());
+		vipRestoreSettings(in);
+
+		QCOMPARE(VipProcessingManager::listLimitType(), limitType);
+		QCOMPARE(VipProcessingManager::maxListSize(), maxSize);
+		QCOMPARE(VipProcessingManager::maxListMemory(), maxMemory);
+		QCOMPARE((int)VipProcessingManager::defaultPriority(&MultiplyByProperty::staticMetaObject), (int)QThread::InheritPriority);
+
+		vipSetIterateThreadCount(threads);
 	}
 };
 
