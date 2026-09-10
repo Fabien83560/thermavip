@@ -403,6 +403,11 @@ void VipExtractShapesInfos::apply()
 VipExtractCurveInfos::VipExtractCurveInfos(VipPlotPlayer* pl)
   : VipAdditionalInfo(pl)
 {
+	// Tested, as the neighbouring constructor already does: this is called from
+	// clone(), which can hand over a player that is gone.
+	if (!pl)
+		return;
+
 	connect(pl, SIGNAL(sceneModelChanged(VipPlotSceneModel*)), this, SLOT(emitNeedUpdate()));
 	connect(pl->plotSceneModel()->scene(), SIGNAL(selectionChanged()), this, SLOT(emitNeedUpdate()));
 
@@ -1604,6 +1609,20 @@ QList<VipProcessingObject*> VipProcessingObjectInfo::plotAttributes(QList<VipOut
 	// now, save the current VipProcessingPool state, because we are going to modify it heavily
 	pool->save();
 
+	// Restored on every way out. The state installed below stops the pool, disables
+	// every processing but the sources and blocks its signals; the single restore
+	// point at the end is skipped by anything that leaves early, and the player is
+	// then left unusable.
+	struct RestorePool
+	{
+		VipProcessingPool* pool;
+		~RestorePool()
+		{
+			pool->blockSignals(false);
+			pool->restore();
+		}
+	} restore_pool{ pool };
+
 	// disable all processing except the sources, remove the Automatic flag from the sources
 	pool->disableExcept(sources);
 	foreach (VipProcessingObject* obj, sources) {
@@ -1663,11 +1682,14 @@ QList<VipProcessingObject*> VipProcessingObjectInfo::plotAttributes(QList<VipOut
 			break;
 	}
 
-	pool->blockSignals(false);
-
-	// delete the attribute extraction objects
-	for (int i = 0; i < extract.size(); ++i)
-		delete extract[i];
+	// delete the attribute extraction objects. Disconnected first and deleted by
+	// the event loop: these are connected and asynchronous, and destroying one
+	// under its own signal is what a direct delete allows.
+	for (int i = 0; i < extract.size(); ++i) {
+		extract[i]->disconnect();
+		extract[i]->clearInputConnections();
+		extract[i]->deleteLater();
+	}
 
 	// store the result
 	QList<VipProcessingObject*> res;
@@ -1680,8 +1702,8 @@ QList<VipProcessingObject*> VipProcessingObjectInfo::plotAttributes(QList<VipOut
 		res << any;
 	}
 
-	// restore the VipProcessingPool
-	pool->restore();
+	// restore the VipProcessingPool: the guard above does it, this only puts the
+	// time back where it was.
 	pool->read(pool_time);
 
 	return res;
