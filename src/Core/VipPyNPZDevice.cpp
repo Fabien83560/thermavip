@@ -29,12 +29,18 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <QMutex>
+
 #include "VipLogging.h"
 #include "VipPyNPZDevice.h"
 
 class VipPyNPZDevice::PrivateData
 {
 public:
+	// Written by apply(), which runs in the thread of the task pool, and read by
+	// close(), which any thread may call and which the destructor calls too. Both
+	// are implicitly shared, so an assignment racing a copy loses a reference.
+	QMutex mutex;
 	VipNDArray previous;
 	QString dataname;
 };
@@ -59,7 +65,11 @@ VipPyNPZDevice::~VipPyNPZDevice()
 {
 	// Not close(): a virtual does not dispatch from here, and the wait is kept
 	// short because the destruction usually runs in the thread serving the
-	// interface. The recording is still written.
+	// interface. The recording is still written. The input is closed and the
+	// scheduled work waited for first, so that apply() is not still writing the
+	// members read below.
+	setEnabled(false);
+	wait(false, 2000);
 	writeRecording(2000, true);
 }
 
@@ -87,14 +97,20 @@ void VipPyNPZDevice::apply()
 			setError("Empty input array");
 			return;
 		}
-		d_data->dataname = any.name();
-
-		if (!d_data->previous.isEmpty() && ar.shape() != d_data->previous.shape()) {
+		bool mismatch = false;
+		{
+			QMutexLocker lock(&d_data->mutex);
+			if (!d_data->previous.isEmpty() && ar.shape() != d_data->previous.shape())
+				mismatch = true;
+			else {
+				d_data->dataname = any.name();
+				d_data->previous = ar;
+			}
+		}
+		if (mismatch) {
 			setError("Shape mismatch");
 			return;
 		}
-
-		d_data->previous = ar;
 
 		QString varname = "arr" + QString::number((qint64)this);
 		QString newname = "new" + QString::number((qint64)this);
@@ -133,14 +149,21 @@ void VipPyNPZDevice::apply()
 
 void VipPyNPZDevice::close()
 {
+	// First: it disables the input and waits for the scheduled processings, so
+	// that no apply() is still writing what is read below.
+	VipIODevice::close();
 	writeRecording(10000, false);
 }
 
 void VipPyNPZDevice::writeRecording(int timeout_ms, bool destroying)
 {
-	if (d_data->previous.isEmpty())
-		return;
-	QString dataname = d_data->dataname;
+	QString dataname;
+	{
+		QMutexLocker lock(&d_data->mutex);
+		if (d_data->previous.isEmpty())
+			return;
+		dataname = d_data->dataname;
+	}
 	if (dataname.isEmpty())
 		dataname = "arr_0";
 	else {
@@ -190,8 +213,11 @@ void VipPyNPZDevice::writeRecording(int timeout_ms, bool destroying)
 			     "del " + pathvar + "\n"
 			     "del " + namevar;
 
-	d_data->dataname.clear();
-	d_data->previous = VipNDArray();
+	{
+		QMutexLocker lock(&d_data->mutex);
+		d_data->dataname.clear();
+		d_data->previous = VipNDArray();
+	}
 
 	lastError = VipPyInterpreter::instance()->execCode(code).value(timeout_ms).value<VipPyError>();
 	if (!lastError.isNull()) {
@@ -203,6 +229,10 @@ void VipPyNPZDevice::writeRecording(int timeout_ms, bool destroying)
 class VipPyMATDevice::PrivateData
 {
 public:
+	// Written by apply(), which runs in the thread of the task pool, and read by
+	// close(), which any thread may call and which the destructor calls too. Both
+	// are implicitly shared, so an assignment racing a copy loses a reference.
+	QMutex mutex;
 	VipNDArray previous;
 	QString dataname;
 };
@@ -217,7 +247,11 @@ VipPyMATDevice::~VipPyMATDevice()
 {
 	// Not close(): a virtual does not dispatch from here, and the wait is kept
 	// short because the destruction usually runs in the thread serving the
-	// interface. The recording is still written.
+	// interface. The recording is still written. The input is closed and the
+	// scheduled work waited for first, so that apply() is not still writing the
+	// members read below.
+	setEnabled(false);
+	wait(false, 2000);
 	writeRecording(2000, true);
 }
 
@@ -245,14 +279,20 @@ void VipPyMATDevice::apply()
 			setError("Empty input array");
 			return;
 		}
-		d_data->dataname = any.name();
-
-		if (!d_data->previous.isEmpty() && ar.shape() != d_data->previous.shape()) {
+		bool mismatch = false;
+		{
+			QMutexLocker lock(&d_data->mutex);
+			if (!d_data->previous.isEmpty() && ar.shape() != d_data->previous.shape())
+				mismatch = true;
+			else {
+				d_data->dataname = any.name();
+				d_data->previous = ar;
+			}
+		}
+		if (mismatch) {
 			setError("Shape mismatch");
 			return;
 		}
-
-		d_data->previous = ar;
 
 		QString varname = "arr" + QString::number((qint64)this);
 		QString newname = "new" + QString::number((qint64)this);
@@ -290,14 +330,21 @@ void VipPyMATDevice::apply()
 
 void VipPyMATDevice::close()
 {
+	// First: it disables the input and waits for the scheduled processings, so
+	// that no apply() is still writing what is read below.
+	VipIODevice::close();
 	writeRecording(10000, false);
 }
 
 void VipPyMATDevice::writeRecording(int timeout_ms, bool destroying)
 {
-	if (d_data->previous.isEmpty())
-		return;
-	QString dataname = d_data->dataname;
+	QString dataname;
+	{
+		QMutexLocker lock(&d_data->mutex);
+		if (d_data->previous.isEmpty())
+			return;
+		dataname = d_data->dataname;
+	}
 	if (dataname.isEmpty())
 		dataname = "arr_0";
 	else {
@@ -346,8 +393,11 @@ void VipPyMATDevice::writeRecording(int timeout_ms, bool destroying)
 			     "del " + namevar + "\n"
 			     "del d";
 
-	d_data->dataname.clear();
-	d_data->previous = VipNDArray();
+	{
+		QMutexLocker lock(&d_data->mutex);
+		d_data->dataname.clear();
+		d_data->previous = VipNDArray();
+	}
 
 	lastError = VipPyInterpreter::instance()->execCode(code).value(timeout_ms).value<VipPyError>();
 	if (!lastError.isNull()) {

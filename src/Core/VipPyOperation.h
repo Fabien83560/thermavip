@@ -331,16 +331,26 @@ public:
 	{
 	}
 
+	/// @brief How long the immediate calls below wait for the interpreter, in
+	/// milliseconds. Not unlimited: the promise of a "Timeout" result only holds
+	/// when a delay is given, every caller in the project gives one of its own,
+	/// and a call made from the thread of the interface that never returns freezes
+	/// the application with nothing to cancel. To wait without a bound, ask for it
+	/// in as many words: sendCommand(cmd).value(-1).
+	static constexpr int immediateTimeout = 30000;
+
 	/// @brief Immediate command evaluation.
 	/// Returns the command result (VipPyError object on error).
-	virtual QVariant execCommand(const VipPyCommand& cmd) { return sendCommand(cmd).value(); }
+	/// Waits at most immediateTimeout milliseconds.
+	virtual QVariant execCommand(const VipPyCommand& cmd) { return sendCommand(cmd).value(immediateTimeout); }
 
 	/// @brief Immediate commands evaluation.
 	/// Execude all commands and store their results in a QVariantMap.
 	/// Command execution will stop at the first error, and a VipPyError object is returned.
 	/// Returns the commands results on success (QVariantMap object).
 	/// The member VipPyCommand::buildId() is used as keys for the QVariantMap.
-	virtual QVariant execCommands(const VipPyCommandList& cmds) { return sendCommands(cmds).value(); }
+	/// Waits at most immediateTimeout milliseconds.
+	virtual QVariant execCommands(const VipPyCommandList& cmds) { return sendCommands(cmds).value(immediateTimeout); }
 
 	/// @brief Asynchronous command evaluation.
 	/// Returns a VipPyFuture object.

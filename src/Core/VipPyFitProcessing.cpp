@@ -386,31 +386,41 @@ QString VipPyFitProcessing::fitName(Type type) {
 
 void VipPyFitProcessing::setTimeUnit(const QString& unit)
 {
-	if (m_timeUnit != unit) {
-		m_timeUnit = unit;
-		if (unit == "ns")
-			m_timeFactor = 1;
-		else if (unit == "us")
-			m_timeFactor = 1 / 1000.;
-		else if (unit == "ms")
-			m_timeFactor = 1 / 1000000.;
-		else if (unit == "s")
-			m_timeFactor = 1 / 1000000000.;
-		else {
-			m_timeUnit = QString();
-			m_timeFactor = 1;
+	bool changed = false;
+	{
+		QMutexLocker lock(&m_timeLock);
+		if (m_timeUnit != unit) {
+			changed = true;
+			m_timeUnit = unit;
+			if (unit == "ns")
+				m_timeFactor = 1;
+			else if (unit == "us")
+				m_timeFactor = 1 / 1000.;
+			else if (unit == "ms")
+				m_timeFactor = 1 / 1000000.;
+			else if (unit == "s")
+				m_timeFactor = 1 / 1000000000.;
+			else {
+				m_timeUnit = QString();
+				m_timeFactor = 1;
+			}
 		}
-
-		reload();
 	}
+
+	// Outside the lock: it schedules the processing that reads what was just
+	// written.
+	if (changed)
+		reload();
 }
 QString VipPyFitProcessing::timeUnit() const
 {
+	QMutexLocker lock(&m_timeLock);
 	return m_timeUnit;
 }
 
 double VipPyFitProcessing::timeFactor() const
 {
+	QMutexLocker lock(&m_timeLock);
 	return m_timeFactor;
 }
 
