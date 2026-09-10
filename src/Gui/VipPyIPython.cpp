@@ -1144,12 +1144,21 @@ QString VipIPythonShellProcess::lastError() const
 	return d_data->lastError;
 }
 
-void VipIPythonShellProcess::setStyleSheet(const QString& st)
+bool VipIPythonShellProcess::setStyleSheet(const QString& st)
 {
+	// The guard the seven other members of this class all carry: the segment is null
+	// until start() has succeeded, and null again after either failure path. And the
+	// parameter was ignored in favour of the application-wide sheet, so any caller
+	// passing its own was silently given another one.
+	d_data->lastError.clear();
+	if (state() != Running || !d_data->mem || !d_data->mem->isValid()) {
+		d_data->lastError = "VipIPythonShellProcess not running";
+		return false;
+	}
 
 	// send style sheet
-	QByteArray stylesheet = "SH_STYLE_SHEET  " + qApp->styleSheet().toLatin1();
-	d_data->mem->write(stylesheet.data(), stylesheet.size());
+	QByteArray stylesheet = "SH_STYLE_SHEET  " + st.toLatin1();
+	return d_data->mem->write(stylesheet.data(), stylesheet.size(), timeout());
 }
 
 QString VipIPythonShellProcess::findNextMemoryName()
@@ -1254,11 +1263,21 @@ bool VipIPythonShellWidget::restartProcess()
 		delete d_data->widget;
 		d_data->widget = nullptr;
 	}
+
+	// The layout is only built by the constructor, and only when the first start
+	// succeeded. The tab and its Restart button are added either way, so a second
+	// start that works where the first failed used to dereference null here.
+	if (!d_data->layout) {
+		d_data->layout = new QVBoxLayout();
+		d_data->layout->setContentsMargins(5, 5, 5, 5);
+		setLayout(d_data->layout);
+	}
+
 	qint64 pid = d_data->wid = d_data->process.start(d_data->font_size, d_data->style);
 	if (pid) {
 		WId handle = (WId)pid;
 		d_data->window = QWindow::fromWinId((WId)handle);
-		d_data->widget = QWidget::createWindowContainer(d_data->window);
+		d_data->widget = QWidget::createWindowContainer(d_data->window, this);
 		d_data->layout->addWidget(d_data->widget);
 		d_data->process.setStyleSheet(qApp->styleSheet());
 		// launch startup code
@@ -1271,11 +1290,16 @@ bool VipIPythonShellWidget::restartProcess()
 	}
 }
 
-void VipIPythonShellWidget::focusChanged(QWidget* old, QWidget* now)
+void VipIPythonShellWidget::focusChanged(QWidget*, QWidget*)
 {
 #ifdef _WIN32
-	if (GetFocus() == (HWND)d_data->wid)
-		vipGetIPythonToolWidget()->setFocus();
+	// The accessor holds a QPointer that is only assigned after the interpreter is
+	// built, and building it moves the focus: this was the one call site of the
+	// seven in the sources that did not test the result.
+	if (GetFocus() != (HWND)d_data->wid)
+		return;
+	if (VipIPythonToolWidget* tw = vipGetIPythonToolWidget())
+		tw->setFocus();
 #endif
 }
 

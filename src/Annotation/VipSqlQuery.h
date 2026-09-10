@@ -388,14 +388,18 @@ class VIP_ANNOTATION_EXPORT VipLongLongSpinBox : public QAbstractSpinBox
 	Q_PROPERTY(qint64 maximum READ maximum WRITE setMaximum)
 	Q_PROPERTY(qint64 value READ value WRITE setValue NOTIFY valueChanged USER true)
 
-	qint64 m_minimum;
-	qint64 m_maximum;
-	qint64 m_value;
+	// Initialised where they are declared: the only constructor set none of them, and
+	// validate() and value() read them straight away, so what the box accepted
+	// depended on whatever the memory held.
+	qint64 m_minimum{ std::numeric_limits<qint64>::min() };
+	qint64 m_maximum{ std::numeric_limits<qint64>::max() };
+	qint64 m_value{ 0 };
 
 public:
 	explicit VipLongLongSpinBox(QWidget* parent = nullptr)
 	  : QAbstractSpinBox(parent)
 	{
+		lineEdit()->setText(textFromValue(m_value));
 		connect(lineEdit(), SIGNAL(textEdited(const QString&)), this, SLOT(onEditFinished()));
 	}
 	~VipLongLongSpinBox(){};
@@ -414,6 +418,7 @@ public:
 	{
 		setMinimum(min);
 		setMaximum(max);
+		setValue(m_value);
 	}
 
 	virtual void stepBy(int steps)
@@ -460,10 +465,17 @@ protected:
 public Q_SLOTS:
 	void setValue(qint64 val)
 	{
-		if (m_value != val) {
+		// Bounded, which is what makes setRange() mean anything, and the signal the
+		// property declares as its NOTIFY is actually emitted: it was declared, moc
+		// generated it, and nothing in the class ever sent it, so the four connections
+		// on it were dead.
+		val = qBound(m_minimum, val, m_maximum);
+		if (m_value == val)
+			return;
+		m_value = val;
+		if (lineEdit()->text() != textFromValue(val))
 			lineEdit()->setText(textFromValue(val));
-			m_value = val;
-		}
+		Q_EMIT valueChanged(m_value);
 	}
 
 	void onEditFinished()
@@ -603,7 +615,9 @@ public:
 	QString thermalEvent() const;
 
 private Q_SLOTS:
-	void pulseChanged(Vip_experiment_id);
+	// qint64, not the alias: the meta-object keeps the spelling, so a slot declared
+	// with the alias cannot be matched against a signal declared with the type.
+	void pulseChanged(qint64);
 	void deviceChanged();
 
 public:
