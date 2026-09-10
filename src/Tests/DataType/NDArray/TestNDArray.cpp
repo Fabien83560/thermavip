@@ -216,6 +216,20 @@ private Q_SLOTS:
 		QVERIFY2(back == source[0], qPrintable(text[0]));
 	}
 
+	/// long and unsigned long are declared arithmetic and convertible, and the
+	/// histogram has branches for them, but no array handle was registered for
+	/// either: an array of long could not be created at all, and it said nothing.
+	void anArrayOfLongCanBeCreated()
+	{
+		VipNDArray longs(qMetaTypeId<long>(), vipVector(2, 3));
+		QVERIFY2(!longs.isNull(), "an array of long must exist");
+		QCOMPARE(longs.shape(), vipVector(2, 3));
+
+		VipNDArray ulongs(qMetaTypeId<unsigned long>(), vipVector(4));
+		QVERIFY2(!ulongs.isNull(), "an array of unsigned long must exist");
+		QCOMPARE(ulongs.size(), (qsizetype)4);
+	}
+
 	/// The axis of a stack comes from the caller and is used as an index into a
 	/// shape held on the stack, twice to write. The only bound was a debug
 	/// assertion, which is nothing in a release build.

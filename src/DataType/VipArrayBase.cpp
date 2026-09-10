@@ -109,6 +109,13 @@ static bool initHandles()
 	vipRegisterStandardArrayHandle<quint32>();
 	vipRegisterStandardArrayHandle<qint64>();
 	vipRegisterStandardArrayHandle<quint64>();
+	// long and unsigned long are declared arithmetic and convertible by the two
+	// functions above, and the histogram has four branches for them, but no handle
+	// was registered: an array of long could not be created, silently, and those
+	// branches were dead by construction. On Windows the two are metatypes of
+	// their own, so qint32 does not stand in for them.
+	vipRegisterStandardArrayHandle<long>();
+	vipRegisterStandardArrayHandle<unsigned long>();
 	vipRegisterStandardArrayHandle<float>();
 	vipRegisterStandardArrayHandle<double>();
 	vipRegisterStandardArrayHandle<long double>();
