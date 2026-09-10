@@ -544,9 +544,13 @@ static void uploadROIsFromPlayer(VipVideoPlayer* pl, const VipShapeList& shs)
 		attrs.insert("min_T_image_position_x", st.minPos[1]);
 		attrs.insert("min_T_image_position_y", st.minPos[0]);
 		attrs.insert("average_temperature_C", st.mean);
-		attrs.insert("pixel_area", bounding.width() * bounding.height());
-		attrs.insert("centroid_image_position_x", st.maxPos[1]);
-		attrs.insert("centroid_image_position_y", st.maxPos[0]);
+		// The area of the shape, which the statistics already counted, not the area
+		// of its bounding box; and the centre of the shape rather than the position
+		// of the maximum, which two other columns already carry.
+		attrs.insert("pixel_area", (qint64)st.count);
+		const QPointF centroid = sh.polygon().boundingRect().center();
+		attrs.insert("centroid_image_position_x", centroid.x());
+		attrs.insert("centroid_image_position_y", centroid.y());
 
 		// set the event flag
 		attrs.insert("origin", (int)VipPlayerDBAccess::New);
