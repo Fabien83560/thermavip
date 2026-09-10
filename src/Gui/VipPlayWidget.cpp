@@ -1354,6 +1354,11 @@ public:
 
 	QList<VipTimeRangeListItem*> items;
 	QPointer<VipProcessingPool> pool;
+	// setTime() waits for the leaves, and that wait pumps the event loop: a new
+	// move of the cursor then re-entered setTime() and started another read while
+	// the first was still in flight. The nested wait returned at once, so the
+	// outer call gave up before its own read had finished.
+	bool inSetTime = false;
 	bool visible;
 	bool timeRangesLocked;
 	TimeScale* timeScale;
@@ -1697,10 +1702,22 @@ void VipPlayerArea::setTime(double t)
 	d_data->timeSliderGrip->blockSignals(true);
 	d_data->timeSliderGrip->setValue(t);
 	d_data->timeSliderGrip->blockSignals(false);
-	if (sender() != processingPool()) {
+	if (sender() != processingPool() && !d_data->inSetTime) {
+		struct ClearInSetTime
+		{
+			bool& flag;
+			~ClearInSetTime() { flag = false; }
+		} clear_in_set_time{ d_data->inSetTime };
+		d_data->inSetTime = true;
+
 		pool->read(t);
+		// Bounded, and per leaf: this runs in the thread of the interface, and an
+		// unbounded wait on a slow or distant device froze it with nothing to
+		// cancel.
 		VipProcessingObjectList objects = pool->leafs(false);
-		objects.wait();
+		for (int i = 0; i < objects.size(); ++i)
+			if (objects[i])
+				objects[i]->wait(true, 200);
 	}
 }
 

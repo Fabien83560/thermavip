@@ -3115,7 +3115,17 @@ void VipDragMenu::mouseMoveEvent(QMouseEvent* evt)
 		// this->close();
 		QDrag* drag = d_data->drag[mime];
 		drag->setMimeData(mime);
+
+		// exec() opens a nested event loop from inside a mouse event of a menu
+		// that is itself usually inside the nested loop of QMenu::exec. Anything
+		// that closes the parent window or reloads the session while the drag is
+		// on destroys this menu, and everything after the call used to run on a
+		// destroyed object.
+		const QPointer<VipDragMenu> alive(this);
 		drag->exec();
+		if (!alive)
+			return;
+
 		QCoreApplication::removePostedEvents(drag, QEvent::DeferredDelete);
 		// QCoreApplication::processEvents();
 		// QMetaObject::invokeMethod(QCoreApplication::instance(), std::bind(execDrag, mime), Qt::QueuedConnection);
