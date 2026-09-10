@@ -1032,6 +1032,7 @@ QList<QByteArray> vipLoadCustomProperties(VipArchive& arch, QObject* obj)
 VipCoreSettings::VipCoreSettings()
   : m_log_overwrite(false)
   , m_log_date(false)
+  , m_register_associations(true)
 {
 }
 
@@ -1059,6 +1060,15 @@ bool VipCoreSettings::logFileDate() const
 	return m_log_date;
 }
 
+void VipCoreSettings::setRegisterFileAssociations(bool enable)
+{
+	m_register_associations = enable;
+}
+bool VipCoreSettings::registerFileAssociations() const
+{
+	return m_register_associations;
+}
+
 void VipCoreSettings::setSkin(const QString& skin)
 {
 	m_skin = skin;
@@ -1074,6 +1084,7 @@ bool VipCoreSettings::save(VipArchive& ar)
 		ar.content("logFileOverwrite", VipCoreSettings::instance()->logFileOverwrite());
 		ar.content("logFileDate", VipCoreSettings::instance()->logFileDate());
 		ar.content("skin", VipCoreSettings::instance()->skin());
+		ar.content("registerFileAssociations", VipCoreSettings::instance()->registerFileAssociations());
 		ar.end();
 		return ar;
 	}
@@ -1093,6 +1104,13 @@ bool VipCoreSettings::restore(VipArchive& ar)
 		VipCoreSettings::instance()->setLogFileOverwrite(ar.read("logFileOverwrite").value<bool>());
 		VipCoreSettings::instance()->setLogFileDate(ar.read("logFileDate").value<bool>());
 		VipCoreSettings::instance()->setSkin(ar.read("skin").toString());
+		// Added after the fact: a settings file written before it has no such content,
+		// and that failed read must not condemn the ones that succeeded.
+		const QVariant assoc = ar.read("registerFileAssociations");
+		if (ar.hasError())
+			ar.resetError();
+		else
+			VipCoreSettings::instance()->setRegisterFileAssociations(assoc.value<bool>());
 		ar.end();
 		return ar;
 	}

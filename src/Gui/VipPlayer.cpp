@@ -3271,9 +3271,11 @@ void VipVideoPlayer::updateStatusInfo()
 
 void VipVideoPlayer::showColorScaleParameters()
 {
-	vipGetPlotToolWidgetPlayer()->setItem(d_data->viewer->area()->colorMapAxis());
-	vipGetPlotToolWidgetPlayer()->show();
-	vipGetPlotToolWidgetPlayer()->resetSize();
+	if (VipPlotToolWidgetPlayer* tool = vipGetPlotToolWidgetPlayer()) {
+		tool->setItem(d_data->viewer->area()->colorMapAxis());
+		tool->show();
+		tool->resetSize();
+	}
 }
 
 void VipVideoPlayer::setColorScaleVisible(bool vis)
@@ -7095,9 +7097,11 @@ void VipPlotPlayer::showParameters()
 	if (!current)
 		current = qobject_cast<VipPlotItem*>(defaultEditableObject());
 
-	vipGetPlotToolWidgetPlayer()->setItem(current);
-	vipGetPlotToolWidgetPlayer()->show();
-	vipGetPlotToolWidgetPlayer()->resetSize();
+	if (VipPlotToolWidgetPlayer* tool = vipGetPlotToolWidgetPlayer()) {
+		tool->setItem(current);
+		tool->show();
+		tool->resetSize();
+	}
 }
 
 void VipPlotPlayer::setTimeMarkerAlwaysVisible(bool enable)

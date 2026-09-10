@@ -101,8 +101,12 @@ QString VipUpdate::getUpdateProgram()
 		for (int i = 0; i < lst.size(); ++i) {
 			QString fname = lst[i].fileName();
 			// vip_debug("%s\n", fname.toLatin1().data());
+			// The absolute path: this name is handed to QProcess, and an unqualified
+			// one is resolved against the current directory and PATH, both of which the
+			// application points at directories a plain user can write into. The program
+			// this names is the one that replaces the binaries.
 			if (fname.startsWith("vipupdate") && fname.endsWith(".exe"))
-				return update_program = fname;
+				return update_program = lst[i].absoluteFilePath();
 		}
 	}
 	return update_program;

@@ -53,6 +53,7 @@
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QRadioButton>
 #include <QTimer>
 #include <QToolButton>
@@ -564,7 +565,14 @@ public:
 	RecordType recordType;
 
 	// saving objects
-	VipBaseDragWidget* sourceWidget;
+	// The three other holders of a drag widget in this file are QPointer, and the
+	// null tests already written against this one only mean something once it is one:
+	// the recording loop lets the event queue run on every frame, which is where a
+	// closed player is destroyed.
+	QPointer<VipBaseDragWidget> sourceWidget;
+
+	// Re-entrance guard for launchRecord().
+	bool inLaunchRecord{ false };
 	VipGenericRecorder* recorder;
 	QList<VipIODevice*> sourceDevices;
 	VipProcessingObjectList independantResourceProcessings;
@@ -1255,7 +1263,21 @@ void VipRecordToolWidget::timeout()
 
 void VipRecordToolWidget::launchRecord(bool launch)
 {
+	// This slot is connected, queued, to the open mode of the recorder, and its own
+	// body closes that recorder: closing posted a second call, and the call to
+	// vipProcessEvents() below delivers one already pending inside this very call.
+	// The second pass rebuilt the whole source graph and ended a render already
+	// ended.
+	if (d_data->inLaunchRecord)
+		return;
+	d_data->inLaunchRecord = true;
+	const auto leave = qScopeGuard([this] { d_data->inLaunchRecord = false; });
+
 	if (!launch) {
+		// Captured before the call below, which clears it as a side effect, and tested:
+		// the end of render was given the pointer that had just been set to null.
+		QPointer<VipBaseDragWidget> rendered = d_data->sourceWidget;
+
 		// stop the timer
 		d_data->timer.stop();
 		vipProcessEvents();
@@ -1266,8 +1288,8 @@ void VipRecordToolWidget::launchRecord(bool launch)
 		d_data->recorder->setEnabled(false);
 
 		// end saving: cleanup
-		if (this->recordType() == Movie)
-			VipRenderObject::endRender(d_data->sourceWidget, d_data->state);
+		if (this->recordType() == Movie && rendered)
+			VipRenderObject::endRender(rendered, d_data->state);
 
 		// TOCHECK:
 		// We comment this as it disable the possibility to reuse the saver parameters
@@ -1438,6 +1460,14 @@ void VipRecordToolWidget::launchRecord(bool launch)
 					d_data->sourceDisplayObjects[i]->update();
 				vipProcessEvents();
 
+				// Revalidated after the queue ran, as the display objects already are
+				// before the loop: the three uses below render a player that may have
+				// been closed in between.
+				if (recordType() == Movie && !d_data->sourceWidget) {
+					VIP_LOG_ERROR("Recording stopped: the recorded player has been closed");
+					break;
+				}
+
 				if (++skip_count == skip) {
 					skip_count = 0;
 					if (recordSceneOnly() && selectedVideoPlayer()) {
@@ -1572,7 +1602,9 @@ VipRecordWidgetButton::VipRecordWidgetButton(VipBaseDragWidget* widget, QWidget*
 	vlay->addWidget(&d_data->filename);
 	w->setLayout(vlay);
 
-	VipDragMenu* menu = new VipDragMenu();
+	// Parented, like the other menu of this file: setMenu() takes no ownership, so
+	// this one and everything it holds outlived the button that used it.
+	VipDragMenu* menu = new VipDragMenu(this);
 	menu->setWidget(w);
 	menu->setMinimumWidth(200);
 
@@ -1589,8 +1621,15 @@ VipRecordWidgetButton::VipRecordWidgetButton(VipBaseDragWidget* widget, QWidget*
 	QList<VipIODevice::Info> devices = VipIODevice::possibleWriteDevices(QString(), data_list);
 	QStringList res;
 	for (int i = 0; i < devices.size(); ++i) {
-		VipIODevice* dev = qobject_cast<VipIODevice*>(devices[i].create()); // vipCreateVariant(devices[i]).value<VipIODevice*>();
-		QString fs = dev->fileFilters();
+		// These factories come from plugins. The cast answers null for anything that is
+		// not a device, and the virtual call on the next line was made regardless.
+		QObject* created = devices[i].create();
+		VipIODevice* dev = qobject_cast<VipIODevice*>(created);
+		if (!dev) {
+			delete created;
+			continue;
+		}
+		const QString fs = dev->fileFilters();
 		if (!fs.isEmpty())
 			res.append(fs);
 		delete dev;
@@ -1612,9 +1651,12 @@ VipRecordWidgetButton::VipRecordWidgetButton(VipBaseDragWidget* widget, QWidget*
 	d_data->recorder->topLevelInputAt(0)->toMultiInput()->setListType(VipDataList::FIFO, VipDataList::MemorySize, INT_MAX, 500000000);
 	d_data->recorder->setScheduleStrategies(VipProcessingObject::Asynchronous);
 
-	d_data->frequency.setRange(0, 100);
+	// Zero was reachable with one press of the down arrow, and it is the divisor of
+	// the interval computed when recording starts.
+	d_data->frequency.setRange(1, 100);
 	d_data->frequency.setValue(15);
-	d_data->frequency.setToolTip("Record frequence in Frame Per Second");
+	d_data->frequency.setSuffix(" FPS");
+	d_data->frequency.setToolTip("Record frequency in frames per second");
 
 	connect(&d_data->timer, SIGNAL(timeout()), this, SLOT(newImage()));
 	connect(&d_data->filename, SIGNAL(changed(const QString&)), this, SLOT(filenameChanged()));
@@ -1669,7 +1711,9 @@ void VipRecordWidgetButton::filenameChanged()
 void VipRecordWidgetButton::setStarted(bool enable)
 {
 	if (enable) {
-		d_data->timer.setInterval(1000 / frequency());
+		// Bounded here as well: frequency() is public, so the range of the control is
+		// not the only way this value is set.
+		d_data->timer.setInterval(1000 / qBound(1, frequency(), 1000));
 		d_data->timer.setSingleShot(false);
 		if (!d_data->widget || !d_data->ready || !d_data->recorder->open(VipIODevice::WriteOnly)) {
 			VIP_LOG_ERROR("unable to start recording: wrong output format");

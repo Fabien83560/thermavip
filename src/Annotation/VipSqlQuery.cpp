@@ -2804,8 +2804,8 @@ VipQueryDBWidget::VipQueryDBWidget(const QString& device, QWidget* parent)
 	d_data->removePrevious.setToolTip("Clear the playr's content before displaying retrieved events from DB");
 	d_data->removePrevious.setVisible(false);
 
-	connect(d_data->minPulse, SIGNAL(valueChanged(Vip_experiment_id)), this, SLOT(pulseChanged(Vip_experiment_id)));
-	connect(d_data->maxPulse, SIGNAL(valueChanged(Vip_experiment_id)), this, SLOT(pulseChanged(Vip_experiment_id)));
+	connect(d_data->minPulse, SIGNAL(valueChanged(qint64)), this, SLOT(pulseChanged(qint64)));
+	connect(d_data->maxPulse, SIGNAL(valueChanged(qint64)), this, SLOT(pulseChanged(qint64)));
 
 	connect(&d_data->device, SIGNAL(currentIndexChanged(int)), this, SLOT(deviceChanged()));
 }
@@ -2828,8 +2828,8 @@ void VipQueryDBWidget::deviceChanged()
 	delete d_data->maxPulse;
 	d_data->maxPulse = maxp;
 
-	connect(d_data->minPulse, SIGNAL(valueChanged(Vip_experiment_id)), this, SLOT(pulseChanged(Vip_experiment_id)));
-	connect(d_data->maxPulse, SIGNAL(valueChanged(Vip_experiment_id)), this, SLOT(pulseChanged(Vip_experiment_id)));
+	connect(d_data->minPulse, SIGNAL(valueChanged(qint64)), this, SLOT(pulseChanged(qint64)));
+	connect(d_data->maxPulse, SIGNAL(valueChanged(qint64)), this, SLOT(pulseChanged(qint64)));
 
 	setPulseRange(range);
 }
@@ -3065,7 +3065,7 @@ QString VipQueryDBWidget::thermalEvent() const
 	return res;
 }
 
-void VipQueryDBWidget::pulseChanged(Vip_experiment_id v)
+void VipQueryDBWidget::pulseChanged(qint64 v)
 {
 	if (d_data->linked.isChecked()) {
 		d_data->minPulse->blockSignals(true);

@@ -489,6 +489,7 @@ class VIP_CORE_EXPORT VipCoreSettings
 	VipCoreSettings();
 	bool m_log_overwrite;
 	bool m_log_date;
+	bool m_register_associations;
 	QString m_skin;
 
 public:
@@ -499,6 +500,11 @@ public:
 
 	void setLogFileDate(bool);
 	bool logFileDate() const;
+
+	/// Whether the application may declare itself in the system registry as the
+	/// handler of the 'thermavip' URL scheme and of the .session extension.
+	void setRegisterFileAssociations(bool);
+	bool registerFileAssociations() const;
 
 	/// Set the GUI skin.
 	/// This function is provided in the Core module as the skin must be loaded before starting Thermavip GUI.

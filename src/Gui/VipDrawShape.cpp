@@ -51,8 +51,10 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QPainter>
+#include <QScopeGuard>
 #include <QScrollArea>
 #include <QTextStream>
+#include <memory>
 #include <qmessagebox.h>
 
 VipDrawGraphicsShape::VipDrawGraphicsShape(VipPlotSceneModel* plotSceneModel, const QString& group)
@@ -794,17 +796,27 @@ public:
 		if ((str >> c).status() == QTextStream::Ok)
 			return QVariant::fromValue(c);
 
-		QVariant v = val;
-		if (v.convert(VIP_META(QMetaType::Double)))
-			return v;
-		else if (v.convert(VIP_META(qMetaTypeId<complex_d>())))
-			return v;
-		else if (v.convert(VIP_META(qMetaTypeId<complex_f>())))
-			return v;
-		else if (!m_value.text().isEmpty())
-			return QVariant(m_value.text());
-		else
-			return QVariant();
+		// One copy per attempt: convert() rewrites the variant even when it fails, so
+		// the second and third tests no longer saw the text that was typed but a null
+		// double. The last fallback re-read the widget, which says the author knew.
+		{
+			QVariant v = val;
+			if (v.convert(VIP_META(QMetaType::Double)))
+				return v;
+		}
+		{
+			QVariant v = val;
+			if (v.convert(VIP_META(qMetaTypeId<complex_d>())))
+				return v;
+		}
+		{
+			QVariant v = val;
+			if (v.convert(VIP_META(qMetaTypeId<complex_f>())))
+				return v;
+		}
+		if (!val.isEmpty())
+			return QVariant(val);
+		return QVariant();
 	}
 };
 
@@ -823,6 +835,7 @@ public:
 	QToolBar bar;
 
 	QList<QCheckBox*> groups;
+	bool computing{ false };
 };
 ShowHideGroups::ShowHideGroups(QWidget* parent)
   : QWidget(parent)
@@ -871,9 +884,21 @@ void ShowHideGroups::computeGroups(const QList<VipPlotSceneModel*>& models)
 		}
 	}
 
-	// remove previous checkboxes
-	for (int i = 0; i < d_data->groups.size(); ++i)
-		delete d_data->groups[i];
+	// A click on one of these boxes reaches this function again, synchronously and
+	// through six steps, and the box whose clicked() is still being emitted was then
+	// destroyed under it.
+	if (d_data->computing)
+		return;
+	d_data->computing = true;
+	const auto leave = qScopeGuard([this] { d_data->computing = false; });
+
+	// remove previous checkboxes: hidden at once, disconnected so no second
+	// emission reaches us, and destroyed by the event loop once the stack is clear.
+	for (int i = 0; i < d_data->groups.size(); ++i) {
+		d_data->groups[i]->hide();
+		d_data->groups[i]->disconnect(this);
+		d_data->groups[i]->deleteLater();
+	}
 	d_data->groups.clear();
 
 	// add new checkboxes
@@ -1128,7 +1153,9 @@ VipSceneModelEditor::VipSceneModelEditor(QWidget* parent)
 	// TODO: completely remove d_data->statArea
 	d_data->statArea.hide();
 
-	QMenu* save_menu = new QMenu();
+	// Parented, like the three other menus of this file: setMenu() takes no
+	// ownership, so this one and its four actions outlived the editor.
+	QMenu* save_menu = new QMenu(this);
 	connect(save_menu->addAction("Save shapes..."), SIGNAL(triggered(bool)), this, SLOT(saveShapes()));
 	connect(save_menu->addAction("Create attribute image for selected shapes..."), SIGNAL(triggered(bool)), this, SLOT(saveShapesAttribute()));
 	connect(save_menu->addAction("Save image inside selected shapes bounding rect..."), SIGNAL(triggered(bool)), this, SLOT(saveShapesImage()));
@@ -1672,10 +1699,15 @@ void VipSceneModelEditor::saveShapes()
 		QString filename = VipFileDialog::getSaveFileName(nullptr, "Save shapes", filters.join(";;"));
 		if (!filename.isEmpty()) {
 			QList<VipIODevice::Info> devices = VipIODevice::possibleWriteDevices(filename, QVariantList() << QVariant::fromValue(VipSceneModelList()));
-			VipIODevice* dev = VipCreateDevice::create(devices, filename);
+			// Owned here, as the other call to this factory in this file already makes
+			// clear: the pointer was dropped on both paths, with its output buffer and
+			// its open file.
+			std::unique_ptr<VipIODevice> dev(VipCreateDevice::create(devices, filename));
 			if (dev && dev->open(VipIODevice::WriteOnly)) {
-				dev->inputAt(0)->setData(models);
+				if (VipInput* in = dev->inputAt(0))
+					in->setData(models);
 				dev->update();
+				dev->close();
 			}
 		}
 	}

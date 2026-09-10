@@ -2110,8 +2110,11 @@ void VipMultiDragWidget::passFocus()
 			// bool focus_passed = false;
 			QList<VipBaseDragWidget*> lst = handler->baseDragWidgets();
 			for (int i = 0; i < lst.size(); ++i)
-				if (qobject_cast<VipDragWidget*>(lst[i]) && !lst[i]->isDestroying()) //&& !this->isAncestorOf(lst[i]))
-				{
+				// The term excluding the descendants was commented out in place, and it is
+				// the whole point here: this runs from the destructor, to hand the focus to
+				// a widget that will survive. isDestroying() walks the drag widget parents
+				// only, so a child held through a tab widget or a splitter escapes it.
+				if (qobject_cast<VipDragWidget*>(lst[i]) && !lst[i]->isDestroying() && !this->isAncestorOf(lst[i])) {
 					static_cast<VipDragWidget*>(lst[i])->setFocusWidget();
 					// focus_passed = true;
 					break;
@@ -2456,9 +2459,11 @@ VipDragWidget* VipMultiDragWidget::firstVisibleDragWidget() const
 					if (!w->isMinimized())
 						return w;
 				}
-				else {
-					return static_cast<VipMultiDragWidget*>(b)->firstDragWidget();
-				}
+				// The nested descent called the unfiltered variant, so this could answer a
+				// minimized widget; and it returned whatever came back, null included,
+				// which ended the search on the first nested level that had nothing.
+				else if (VipDragWidget* w = static_cast<VipMultiDragWidget*>(b)->firstVisibleDragWidget())
+					return w;
 			}
 		}
 	return nullptr;
@@ -2488,9 +2493,8 @@ VipDragWidget* VipMultiDragWidget::lastVisibleDragWidget() const
 					if (!w->isMinimized())
 						return w;
 				}
-				else {
-					return static_cast<VipMultiDragWidget*>(b)->lastDragWidget();
-				}
+				else if (VipDragWidget* w = static_cast<VipMultiDragWidget*>(b)->lastVisibleDragWidget())
+					return w;
 			}
 		}
 	return nullptr;
@@ -2743,8 +2747,12 @@ void VipMultiDragWidget::updateSizes(bool enable_resize)
 					double h = 0;
 					for (int y = 0; y < _height; ++y)
 						h += subSplitter(y)->height();
-					h /= (_height - 1);
-					this->resize(width(), (h + 5) * mainCount());
+					// One row divides by zero, and two widgets sharing the tab widget of a
+					// single row is enough to get there.
+					if (_height > 1) {
+						h /= (_height - 1);
+						this->resize(width(), qRound(h + 5) * mainCount());
+					}
 				}
 				else {
 					int row_count;
@@ -2785,21 +2793,29 @@ void VipMultiDragWidget::updateSizes(bool enable_resize)
 			total_size += s.width();
 		}
 
-		double factor = splitter->width() / double(total_size);
-		for (int i = 0; i < sizes.size(); ++i)
-			sizes[i] = sizes[i] * factor;
+		// The divisor is the sum of the hints of the row: zero for an empty row, or
+		// one where every hint is. The factor was then inf or NaN and the assignment
+		// below converted it to an int.
+		if (total_size > 0) {
+			const double factor = splitter->width() / double(total_size);
+			for (int i = 0; i < sizes.size(); ++i)
+				sizes[i] = qRound(sizes[i] * factor);
 
-		splitter->setSizes(sizes);
+			splitter->setSizes(sizes);
+		}
 
 		QSize s = splitter->sizeHint();
 		h_sizes << s.height();
 		h_total_size += s.height();
 	}
 
-	double factor = d_data->v_splitter->height() / double(h_total_size);
-	for (int i = 0; i < h_sizes.size(); ++i)
-		h_sizes[i] = h_sizes[i] * factor;
-	d_data->v_splitter->setSizes(h_sizes);
+	// Same divisor, and it is necessarily zero when there is no row at all.
+	if (h_total_size > 0) {
+		const double factor = d_data->v_splitter->height() / double(h_total_size);
+		for (int i = 0; i < h_sizes.size(); ++i)
+			h_sizes[i] = qRound(h_sizes[i] * factor);
+		d_data->v_splitter->setSizes(h_sizes);
+	}
 
 	// TEST: comment this
 	// vipProcessEvents(nullptr, 500);
@@ -2894,7 +2910,16 @@ void VipMultiDragWidget::showAll()
 
 void VipMultiDragWidget::reorganizeGrid()
 {
-	int h = d_data->v_splitter->height() - (d_data->v_splitter->count() - 1) * 5;
+	// mainCount() is zero as soon as only the sentinel is left, a state the layout
+	// goes through, and qRound() of an infinity is undefined.
+	if (mainCount() <= 0)
+		return;
+
+	// The handle width is settable; the 5 was its default value written twice more
+	// below, so any other setting falsified both the height and the width.
+	const int hw = d_data->maxWidth;
+
+	int h = d_data->v_splitter->height() - (d_data->v_splitter->count() - 1) * hw;
 	int row_h = qRound((double)h / mainCount());
 
 	QList<int> v_sizes;
@@ -2904,7 +2929,9 @@ void VipMultiDragWidget::reorganizeGrid()
 
 	for (int i = 0; i < mainCount(); ++i) {
 		QSplitter* hsplitter = this->subSplitter(i);
-		int w = hsplitter->width() - (hsplitter->count() - 1) * 5;
+		if (!hsplitter || subCount(i) <= 0)
+			continue;
+		int w = hsplitter->width() - (hsplitter->count() - 1) * hw;
 		int col_w = qRound((double)w / subCount(i));
 		QList<int> h_sizes;
 		for (int j = 0; j < subCount(i); ++j)
@@ -2994,12 +3021,20 @@ void VipMultiDragWidget::updateContent()
 	// make sure all splitter handles are visible.
 	// this should not be necessary, but somehow the style sheet mess up with
 	// the splitter visibility.
-	for (int y = 0; y < mainCount(); ++y)
-		d_data->v_splitter->handle(y)->QSplitterHandle::setVisible(true);
+	// The two adjacent loops used different bounds for the same invariant: a
+	// splitter of n widgets owns n handles, so the row loop missed the last one
+	// every time. handle() answers null out of range, and the call was qualified,
+	// which is a way of asking for the base member on a virtual function.
+	for (int y = 0; y <= mainCount(); ++y)
+		if (QSplitterHandle* handle = d_data->v_splitter->handle(y))
+			handle->setVisible(true);
 	for (int y = 0; y < mainCount(); ++y) {
 		QSplitter* splitter = subSplitter(y);
+		if (!splitter)
+			continue;
 		for (int x = 0; x <= subCount(y); ++x)
-			splitter->handle(x)->QSplitterHandle::setVisible(true);
+			if (QSplitterHandle* handle = splitter->handle(x))
+				handle->setVisible(true);
 	}
 
 	if (d_data->v_splitter->count() == 1)
@@ -3143,13 +3178,6 @@ void VipMultiDragWidget::moveEvent(QMoveEvent* event)
 		Q_EMIT VipDragWidgetHandler::find(parentWidget())->geometryChanged(this);
 }
 
-void VipMultiDragWidget::closeEvent(QCloseEvent* evt)
-{
-	if (isTopLevel())
-		Q_EMIT VipDragWidgetHandler::find(parentWidget())->closed(this);
-	VipBaseDragWidget::closeEvent(evt);
-}
-
 
 
 
@@ -3238,11 +3266,11 @@ void VipViewportArea::dropMimeData(const QMimeData* mimeData, const QPoint& pos)
 
 		QList<QUrl> urls = mime->urls();
 		QStringList files;
-		for (int i = 0; i < urls.size(); ++i) {
-			files << urls[i].toString();
-			files.last().remove("file:///");
-			vip_debug("%s\n", files.last().toLatin1().data());
-		}
+		for (int i = 0; i < urls.size(); ++i)
+			// toString() is percent-encoded and remove() cut the scheme wherever it
+			// appeared, not only at the front: a name with a space or an accent came out
+			// as a path that does not exist, and a UNC path lost its host.
+			files << (urls[i].isLocalFile() ? urls[i].toLocalFile() : urls[i].toString());
 
 		if (area)
 			Q_EMIT area->textDropped(files, pos);
@@ -3345,7 +3373,11 @@ void VipDragWidgetArea::recomputeSize()
 		for (int i = 0; i < mdrags.size(); ++i)
 			mdrags[i]->move(mdrags[i]->pos() + offset);
 
-		return recomputeSize();
+		// Applied to the rectangle instead of calling this function again: the
+		// recursion stopped only if every widget landed exactly where it was asked,
+		// while the rectangle covers the ones that are not minimized and the move
+		// covers them all.
+		rect.translate(offset);
 	}
 
 	if (maximized.size()) {
@@ -3456,20 +3488,15 @@ VipFunctionDispatcher<2>& vipSetDragWidget()
 
 #include "VipArchive.h"
 #include "VipUniqueId.h"
-#include <qtextstream.h>
 
 VipArchive& operator<<(VipArchive& ar, VipBaseDragWidget* w)
 {
-	// save the title without the unique id
-	QString title = w->windowTitle();
-	QTextStream str(&title, QIODevice::ReadOnly);
-	int id;
-	str >> id;
-	if (str.status() == QTextStream::Ok && id == VipUniqueId::id(w) && str.read(1) == " ")
-		title = str.readAll();
-
 	ar.content("id", VipUniqueId::id<VipBaseDragWidget>(w));
-	ar.content("title", w->windowTitle());
+	// title() already strips the identifier. The block that used to do it here
+	// looked for a space where the title is built with a dash, so it never matched,
+	// and its result was dropped anyway: the prefix went into the file, and reading
+	// it back added a second one.
+	ar.content("title", w->title());
 	ar.content("operations", (int)w->supportedOperations());
 	ar.content("visibility", (int)w->visibility());
 	return ar;
