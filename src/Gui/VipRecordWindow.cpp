@@ -725,7 +725,10 @@ static QMultiMap<QString, int> _progress_status;
 
 void VipRecordWindow::grabImage()
 {
-	QMultiMap<QString, int> current = vipGetMultiProgressWidget()->currentProgresses();
+	VipMultiProgressWidget* progress_widget = vipGetMultiProgressWidget();
+	if (!progress_widget)
+		return;
+	QMultiMap<QString, int> current = progress_widget->currentProgresses();
 	if (diff(current, _progress_status)) {
 		// ok, update image and progress status
 		_progress_status = current;

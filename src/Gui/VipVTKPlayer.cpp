@@ -5320,8 +5320,11 @@ void VipCubeAxesActorWidget::updateWidget()
 	d_data->zVisible->setChecked(d_data->actor->GetZAxisVisibility());
 
 	d_data->xLabelVisible->setChecked(d_data->actor->GetXAxisLabelVisibility());
-	d_data->yLabelVisible->setChecked(d_data->actor->GetXAxisLabelVisibility());
-	d_data->zLabelVisible->setChecked(d_data->actor->GetYAxisLabelVisibility());
+	// Y from Y and Z from Z. The block was copied from the X line and only the widget
+	// names were substituted, so the panel showed the wrong states and the first
+	// click wrote them back onto the actor.
+	d_data->yLabelVisible->setChecked(d_data->actor->GetYAxisLabelVisibility());
+	d_data->zLabelVisible->setChecked(d_data->actor->GetZAxisLabelVisibility());
 
 	d_data->xTickVisible->setChecked(d_data->actor->GetXAxisTickVisibility());
 	d_data->yTickVisible->setChecked(d_data->actor->GetYAxisTickVisibility());

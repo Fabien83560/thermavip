@@ -1663,10 +1663,12 @@ bool VipDisplayPlayerArea::useGlobalColorMap() const
 
 void VipDisplayPlayerArea::editColorMap()
 {
-	vipGetPlotToolWidgetPlayer()->setItem(d_data->colorMapAxis);
-	vipGetPlotToolWidgetPlayer()->show();
-	vipGetPlotToolWidgetPlayer()->raise();
-	vipGetPlotToolWidgetPlayer()->setWindowTitle("Edit workspace color map");
+	if (VipPlotToolWidgetPlayer* tool = vipGetPlotToolWidgetPlayer()) {
+		tool->setItem(d_data->colorMapAxis);
+		tool->show();
+		tool->raise();
+		tool->setWindowTitle("Edit workspace color map");
+	}
 }
 
 /* class ManageMainWidget : public QObject
@@ -4342,8 +4344,9 @@ bool VipMainWindow::loadSessionShowProgress(VipArchive& arch, VipProgress* progr
 		}
 	}
 
-	if (vipGetMultiProgressWidget()->isFloating())
-		vipGetMultiProgressWidget()->hide();
+	if (VipMultiProgressWidget* progress = vipGetMultiProgressWidget())
+		if (progress->isFloating())
+			progress->hide();
 
 	if (VipDisplayPlayerArea* area = displayArea()->currentDisplayPlayerArea())
 		if (area->processingPool()) {
