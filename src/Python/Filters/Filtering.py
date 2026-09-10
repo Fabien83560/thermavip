@@ -424,6 +424,10 @@ class ThermavipPercentileFilter(th.ThermavipPyProcessing):
 
     def setParameters(self,**kwargs):
         self.size = kwargs["Size"];
+        # The parameter is declared, shown as a spin box and sent by the
+        # application, but this only read the two the sibling filters have:
+        # the filter always computed the twentieth percentile.
+        self.percentile = kwargs["Percentile"];
         self.mode = kwargs["Mode"];
 
 class ThermavipPrewittFilter(th.ThermavipPyProcessing):

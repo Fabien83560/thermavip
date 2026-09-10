@@ -47,6 +47,7 @@
 #include <qdrag.h>
 #include <qheaderview.h>
 #include <qitemdelegate.h>
+#include <qregularexpression.h>
 #include <qtoolbar.h>
 #include <qtooltip.h>
 #include <qtreewidget.h>
@@ -1411,7 +1412,12 @@ void VipProcessingObjectInfo::showEvent(QShowEvent* evt)
 
 void VipProcessingObjectInfo::search()
 {
-	QRegExp exp = vipFromWildcard(d_data->search.text(), Qt::CaseInsensitive);
+	// QRegularExpression, not QRegExp: that one only exists in the compatibility
+	// module of Qt5. Left unanchored, and not treating the pattern as a path, so
+	// that a fragment still matches the way indexIn did.
+	const QRegularExpression exp(QRegularExpression::wildcardToRegularExpression(d_data->search.text(),
+								     QRegularExpression::UnanchoredWildcardConversion | QRegularExpression::NonPathWildcardConversion),
+				     QRegularExpression::CaseInsensitiveOption);
 
 	bool restore = d_data->search.text().isEmpty();
 
@@ -1426,7 +1432,7 @@ void VipProcessingObjectInfo::search()
 			if (restore)
 				child->setHidden(false);
 			else {
-				if (exp.indexIn(child->text(0)) >= 0 || exp.indexIn(child->text(1)) >= 0) {
+				if (exp.match(child->text(0)).hasMatch() || exp.match(child->text(1)).hasMatch()) {
 					child->setHidden(false);
 					found = true;
 				}

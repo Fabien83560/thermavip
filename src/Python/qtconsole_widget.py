@@ -99,8 +99,16 @@ class SyncWrite:
         self.stopth=True
         
     def __call__(self,text):
-        core.QCoreApplication.processEvents()
-        return self.init_write(text)
+        # Write first, then let the interface breathe. This used to pump the
+        # event loop before every write, so the keyboard was delivered in the
+        # middle of the user code and could start a second execution over the
+        # first; and a print from a thread of the user pumped the queue of that
+        # thread, to no effect at all. Keyboard events are excluded and the
+        # cost is capped.
+        res = self.init_write(text)
+        if threading.current_thread().ident == main_thread_id:
+            core.QCoreApplication.processEvents(core.QEventLoop.ExcludeUserInputEvents, 5)
+        return res
     
 class SyncRun:
     
