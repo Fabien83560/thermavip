@@ -17,6 +17,7 @@
 #include <qthread.h>
 #include <qmutex.h>
 #include <qfileinfo.h>
+#include <qstandardpaths.h>
 #include <qdir.h>
 #include <qtoolbutton.h>
 #include <qtoolbar.h>
@@ -271,6 +272,19 @@ public:
 					return false;
 				QThread::msleep(15);
 				continue;
+			}
+
+			// The declared fragment size, and the total, bounded by what the writer can
+			// have put there. Both come from the segment: anyone attached to it could
+			// ask for an arbitrary allocation, or keep the loop going with a non zero
+			// flag until memory ran out.
+			if (s < 0 || s > d_header.max_msg_size) {
+				VIP_LOG_ERROR("Refused a fragment whose declared size does not fit");
+				return false;
+			}
+			if (data.size() + (qsizetype)s > (qsizetype)d_header.size) {
+				VIP_LOG_ERROR("Refused a message larger than the shared segment");
+				return false;
 			}
 
 			int prev = data.size();
@@ -713,7 +727,6 @@ qint64 VipIPythonShellProcess::start(int font_size, const QString& _style, const
 
 	d_data->sharedMemoryName = shared_memory_name;
 
-	QString current = QDir::currentPath();
 	current.replace("\\", "/");
 	QString path = QFileInfo(vipAppCanonicalPath()).canonicalPath() + "/Python/qtconsole_widget.py";
 	QString sys_path = QFileInfo(vipAppCanonicalPath()).canonicalPath() + "/Python";
@@ -722,6 +735,19 @@ qint64 VipIPythonShellProcess::start(int font_size, const QString& _style, const
 	QString python = VipPyInterpreter::instance()->python();
 	vip_debug("Start IPython with %s\n", python.toLatin1().data());
 	python.replace("\\", "/");
+	// Resolved to a full path here, once. The default is the bare name "python", and
+	// the current directory of the whole process used to be moved to the user profile
+	// just before the launch, which is a directory anything running as that user can
+	// write into. findExecutable() does not consult the current directory.
+	if (!QFileInfo(python).isAbsolute()) {
+		const QString found = QStandardPaths::findExecutable(python);
+		if (found.isEmpty()) {
+			d_data->lastError = "Python interpreter not found: " + python;
+			return 0;
+		}
+		python = found;
+		python.replace("\\", "/");
+	}
 	QString cmd = python + " " + path + " " + QString::number(font_size) + " " + style + " \"import sys; sys.path.append('" + sys_path + "');import Thermavip; Thermavip.setSharedMemoryName('" +
 		      shared_memory_name +
 		      "'); Thermavip._ipython_interp = __interp \""
@@ -783,16 +809,17 @@ qint64 VipIPythonShellProcess::start(int font_size, const QString& _style, const
 #endif
 	this->setProcessEnvironment(env);
 
+	// The working directory of the child, not of this process: moving the current
+	// directory of Thermavip changes how every relative path it resolves behaves,
+	// including the ones used while the console starts.
 #ifdef _WIN32
-	QDir::setCurrent(env.value("USERPROFILE"));
+	this->setWorkingDirectory(env.value("USERPROFILE"));
 #else
-	QDir::setCurrent(env.value("HOME"));
+	this->setWorkingDirectory(env.value("HOME"));
 #endif
 
 	this->QProcess::start(python, args);
 	this->waitForStarted(5000);
-
-	QDir::setCurrent(current);
 
 	// read pid
 	qint64 pid = 0;

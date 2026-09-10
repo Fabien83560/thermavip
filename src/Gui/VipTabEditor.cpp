@@ -763,9 +763,14 @@ QByteArray VipTabEditor::saveState() const
 		str << (quint32)count();
 		str << (quint32)d_data->tab.currentIndex();
 		for (int i = 0; i < count(); ++i) {
-			QByteArray name = editor(i)->fileInfo().exists() ? editor(i)->fileInfo().canonicalFilePath().toLatin1() : filename(editor(i)).toLatin1();
+			// UTF-8 on both ends. restoreState() reads these back through the implicit
+			// QByteArray to QString conversion, which is fromUtf8: written in Latin-1, an
+			// accented character became one byte that is not a valid UTF-8 sequence and
+			// came back as the replacement character, and anything outside Latin-1 was
+			// already lost on the way out.
+			QByteArray name = editor(i)->fileInfo().exists() ? editor(i)->fileInfo().canonicalFilePath().toUtf8() : filename(editor(i)).toUtf8();
 
-			QByteArray code = editor(i)->fileInfo().exists() ? QByteArray() : editor(i)->toPlainText().toLatin1();
+			QByteArray code = editor(i)->fileInfo().exists() ? QByteArray() : editor(i)->toPlainText().toUtf8();
 
 			// write name and code with their length
 			str << name << code;
