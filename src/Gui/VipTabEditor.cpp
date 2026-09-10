@@ -495,9 +495,19 @@ void VipTabEditor::setUniqueFile(bool unique)
 		return;
 	d_data->unique = unique;
 	if (d_data->unique) {
-		// close all editors
-		for (int i = 0; i < count(); ++i)
-			delete editor(i);
+		// close all editors. Taken from the end, one at a time, and removed from the
+		// tab widget before being destroyed: walking forward while destroying children
+		// either skipped every other editor or freed a page twice, and the read alone
+		// does not say which.
+		while (count() > 0) {
+			VipTextEditor* ed = editor(count() - 1);
+			d_data->tab.removeTab(count() - 1);
+			if (ed) {
+				ed->disconnect(this);
+				ed->setParent(nullptr);
+				delete ed;
+			}
+		}
 		// create a new one
 		createEditor();
 		// hide actions
@@ -821,14 +831,29 @@ void VipTabEditor::aboutToClose(int index)
 
 	if (ask_for_save) {
 		if (vipQuestion( "Save before closing", "Do you want to save editor's content before closing it?", QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
-			save(editor(index));
+			// A save that failed cancels the close. save() answers false when the file
+			// dialogue is dismissed with no name, when the write fails, or when there is
+			// no editor: the tab used to close anyway, so answering Yes to the question
+			// that exists to prevent the loss was what caused it.
+			if (!save(editor(index)))
+				return;
 		}
 	}
 
 	if (id > 0)
 		d_data->ids.remove(id);
 
+	// Destroyed, not merely removed from the tab widget: it stayed a hidden child
+	// with its document, its highlighting and its filter, still listed in the static
+	// editor registry that every colour scheme change walks, and its three
+	// connections to this object were never undone.
+	VipTextEditor* closed = editor(index);
 	d_data->tab.removeTab(index);
+	if (closed) {
+		closed->disconnect(this);
+		closed->setParent(nullptr);
+		closed->deleteLater();
+	}
 	setHeaderBarVisibility();
 }
 
@@ -843,14 +868,21 @@ int VipTabEditor::nextId() const
 
 QString VipTabEditor::filename(VipTextEditor* ed) const
 {
-	QString name = currentEditor()->fileInfo().fileName();
+	// The editor given, not the current one: the fallback below already uses it, and
+	// saving a session walked every tab through this, recording the name of whichever
+	// one happened to be shown.
+	if (!ed)
+		return QString();
+	QString name = ed->fileInfo().fileName();
 	if (name.isEmpty())
 		name = ed->property("filename").toString();
 	return name;
 }
 QString VipTabEditor::canonicalFilename(VipTextEditor* ed) const
 {
-	QString name = currentEditor()->fileInfo().canonicalFilePath();
+	if (!ed)
+		return QString();
+	QString name = ed->fileInfo().canonicalFilePath();
 	if (name.isEmpty())
 		name = ed->property("filename").toString();
 	return name;
