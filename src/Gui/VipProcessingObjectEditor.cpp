@@ -1849,7 +1849,12 @@ VipConvert* VipConvertEditor::convert() const
 void VipConvertEditor::setConvert(VipConvert* tr)
 {
 	if (d_data->convert) {
-		disconnect(d_data->convert, SIGNAL(processingChanged(VipProcessingObject*)), this, SLOT(convertChanged()));
+		// Pointer to member, so the compiler checks the name: this read
+		// convertChanged, a slot that does not exist, while the connection below
+		// was made to conversionChanged. The old connection therefore survived
+		// every call, and the type of a processing no longer edited kept writing
+		// into the box.
+		disconnect(d_data->convert, &VipProcessingObject::processingChanged, this, qOverload<>(&VipConvertEditor::conversionChanged));
 	}
 
 	d_data->convert = tr;
@@ -1859,7 +1864,7 @@ void VipConvertEditor::setConvert(VipConvert* tr)
 		d_data->types.setCurrentIndex(__indexForType(type));
 		d_data->types.blockSignals(false);
 
-		connect(tr, SIGNAL(processingChanged(VipProcessingObject*)), this, SLOT(conversionChanged()));
+		connect(tr, &VipProcessingObject::processingChanged, this, qOverload<>(&VipConvertEditor::conversionChanged));
 	}
 }
 
@@ -2537,7 +2542,9 @@ public:
 	QSpinBox height;
 	QCheckBox smooth;
 
-	QMap<const QMetaObject*, VipUniqueProcessingObjectEditor*> editors;
+	// Guarded: these editors are destroyed when another processing is selected,
+	// which can happen while the loop below pumps the event loop.
+	QMap<const QMetaObject*, QPointer<VipUniqueProcessingObjectEditor>> editors;
 	QPushButton applyToAllDevices;
 
 	/// VipDirectoryReaderEditor has 2 different ways to edit a VipDirectoryReader.
@@ -2755,21 +2762,35 @@ void VipDirectoryReaderEditor::apply()
 		progress.setRange(0, r->deviceCount());
 
 		for (int i = 0; i < r->deviceCount(); ++i) {
+			// Every turn: setValue() re-enters the event loop past the first two
+			// hundred milliseconds, so a slot can close the workspace or select
+			// another processing, which destroys the reader and the editors this
+			// loop was walking.
 			progress.setValue(i);
 			if (progress.canceled())
 				break;
+			if (!d_data->reader)
+				return;
+
+			r = d_data->reader;
+			if (i >= r->deviceCount())
+				break;
 
 			VipIODevice* dev = r->deviceAt(i);
+			if (!dev)
+				continue;
 			const QMetaObject* meta = dev->metaObject();
-			if (d_data->editors.find(meta) != d_data->editors.end()) {
-				if (VipUniqueProcessingObjectEditor* editor = d_data->editors[meta]) {
-					editor->processingObject()->copyParameters(dev);
-				}
+			QMap<const QMetaObject*, QPointer<VipUniqueProcessingObjectEditor>>::const_iterator it = d_data->editors.constFind(meta);
+			if (it != d_data->editors.constEnd() && it.value()) {
+				// The editor can outlive the processing it edits.
+				if (VipProcessingObject* edited = it.value()->processingObject())
+					edited->copyParameters(dev);
 			}
 		}
 
 		// reload the device
-		r->reload();
+		if (d_data->reader)
+			d_data->reader->reload();
 	}
 }
 
@@ -4714,11 +4735,14 @@ static QWidget* defaultEditor(VipProcessingObject* obj)
 class VipUniqueProcessingObjectEditor::PrivateData
 {
 public:
-	VipProcessingObject* processingObject;
+	// Held the way the rest of this file holds a processing: closing a workspace
+	// destroys one without telling its editor, and a raw pointer then answered a
+	// dangling address to everyone who asked, and let a new object reusing that
+	// address pass for a different one.
+	QPointer<VipProcessingObject> processingObject;
 	bool isShowExactProcessingOnly;
 	PrivateData()
-	  : processingObject(nullptr)
-	  , isShowExactProcessingOnly(true)
+	  : isShowExactProcessingOnly(true)
 	{
 	}
 };
@@ -4745,7 +4769,7 @@ void VipUniqueProcessingObjectEditor::emitEditorVisibilityChanged()
 
 VipProcessingObject* VipUniqueProcessingObjectEditor::processingObject() const
 {
-	return const_cast<VipProcessingObject*>(d_data->processingObject);
+	return d_data->processingObject.data();
 }
 
 void VipUniqueProcessingObjectEditor::geometryChanged(QWidget* widget)
