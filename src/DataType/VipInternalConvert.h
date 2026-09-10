@@ -366,8 +366,13 @@ namespace detail
 			}
 			else if constexpr (valid)
 				return static_cast<D>(src);
-			else
+			else {
+				// A pair that cannot be converted used to return a default value, so
+				// the conversion produced zeroes and said nothing. Callers ask first,
+				// through VipIsCastable_v or VipNDArray::canConvert.
+				static_assert(valid, "these two types cannot be converted: ask VipIsCastable_v before converting");
 				return D();
+			}
 		}
 	};
 
@@ -389,7 +394,15 @@ namespace detail
 	struct Convert<D, std::complex<T>>
 	{
 		static const bool valid = false;
-		static D apply(const std::complex<T>&) { return D(); }
+		// The comment says disable, and nothing was: this returned a default value,
+		// so converting a complex array to a real one gave an image of zeroes with
+		// no error anywhere. Callers ask first, through VipIsCastable_v or
+		// VipNDArray::canConvert; instantiating this call is the error.
+		static D apply(const std::complex<T>&)
+		{
+			static_assert(!std::is_same<D, D>::value, "a complex value cannot be converted to this type: ask VipIsCastable_v before converting");
+			return D();
+		}
 	};
 	// complex to string
 	template<class T>
