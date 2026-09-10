@@ -139,7 +139,10 @@ public:
 	QIcon selectedFloatIcon;
 	int hoverIndex;
 	bool streamingButtonEnabled;
-	bool dirtyStreamingButton;
+	// Atomic: written from slots reached by direct connections from the thread of
+	// the pool and read by the thread of the interface. Tested then set, the
+	// notification it stands for could be dropped.
+	std::atomic<bool> dirtyStreamingButton;
 };
 
 VipDisplayTabBar::VipDisplayTabBar(VipDisplayTabWidget* parent)
@@ -313,10 +316,8 @@ void VipDisplayTabBar::enableStreaming()
 
 void VipDisplayTabBar::updateStreamingButtonDelayed()
 {
-	if (!d_data->dirtyStreamingButton) {
-		d_data->dirtyStreamingButton = true;
+	if (!d_data->dirtyStreamingButton.exchange(true))
 		QMetaObject::invokeMethod(this, "updateStreamingButton", Qt::QueuedConnection);
-	}
 }
 
 void VipDisplayTabBar::updateStreamingButton()
@@ -1093,8 +1094,9 @@ public:
 	Qt::WindowFlags standardFlags;
 	Operations operations;
 
-	bool emitContentChange = false;
-	bool dirtyColorMap;
+	// Same as above: set from direct connections, read here.
+	std::atomic<bool> emitContentChange{ false };
+	std::atomic<bool> dirtyColorMap;
 	VipColorScaleButton* scale;
 	QAction* auto_scale;
 	QAction* fit_to_grip;
@@ -1577,8 +1579,7 @@ void VipDisplayPlayerArea::fitColorScaleToGrips()
 }
 void VipDisplayPlayerArea::internalLayoutColorMapDelay()
 {
-	if (!d_data->dirtyColorMap) {
-		d_data->dirtyColorMap = true;
+	if (!d_data->dirtyColorMap.exchange(true)) {
 		QMetaObject::invokeMethod(this, "internalLayoutColorMap", Qt::QueuedConnection);
 	}
 }
@@ -2129,10 +2130,8 @@ int VipDisplayPlayerArea::id() const
 
 void VipDisplayPlayerArea::emitWorkspaceContentChanged()
 {
-	if (!d_data->emitContentChange) {
-		d_data->emitContentChange = true;
+	if (!d_data->emitContentChange.exchange(true))
 		QMetaObject::invokeMethod(this, &VipDisplayPlayerArea::internalEmitWorkspaceContentChanged, Qt::QueuedConnection);
-	}
 }
 
 void VipDisplayPlayerArea::internalEmitWorkspaceContentChanged()
@@ -2742,11 +2741,14 @@ void VipDisplayArea::removeWidget(VipDisplayPlayerArea* widget)
 
 void VipDisplayArea::clear()
 {
-	while (count() > 0) {
-		d_data->workspaces.first()->deleteLater();
-		d_data->workspaces.pop_front();
-		QCoreApplication::processEvents();
-	}
+	// Detach first, then schedule every deletion. Pumping the event loop between
+	// two removals re-entered this widget with the container half emptied: a slot
+	// could add or remove a workspace in the middle of the walk, and the deferred
+	// deletions came back through removeWidget on the very list being walked.
+	const QList<VipDisplayPlayerArea*> workspaces = d_data->workspaces;
+	d_data->workspaces.clear();
+	for (VipDisplayPlayerArea* area : workspaces)
+		area->deleteLater();
 }
 
 void VipDisplayArea::nextWorkspace()
@@ -3311,13 +3313,28 @@ void VipCloseBar::computeWindowState()
 class UpdateThread : public QThread
 {
 public:
-	VipMainWindow* mainWindow;
+	// Atomic: the loop below reads it every turn while the interface writes it to
+	// ask the thread to stop, and a plain pointer leaves this thread free never to
+	// observe that write.
+	std::atomic<VipMainWindow*> mainWindow;
+	// Read in the thread that owns the widgets, before this one starts. Walking
+	// the widget tree from here read objects of another thread through a pointer
+	// that was not even tested.
+	QPointer<QProgressBar> progress;
 	// Initialised here, not only in run(): the destruction below happens whether
 	// run() was reached or not.
 	VipUpdate* update = nullptr;
 	UpdateThread(VipMainWindow* win)
 	  : mainWindow(win)
 	{
+	}
+
+	/// Bind to the window. Called from the thread that owns the widgets, before
+	/// the thread starts.
+	void bindTo(VipMainWindow* win)
+	{
+		progress = win ? win->iconBar()->updateProgress : nullptr;
+		mainWindow = win;
 	}
 	~UpdateThread()
 	{
@@ -3337,8 +3354,9 @@ public:
 	{
 		if (!update)
 			update = new VipUpdate();
-		connect(update, SIGNAL(updateProgressed(int)), mainWindow->iconBar()->updateProgress, SLOT(setValue(int)));
-		while (VipMainWindow* w = mainWindow) {
+		if (progress)
+			connect(update, SIGNAL(updateProgressed(int)), progress, SLOT(setValue(int)));
+		while (VipMainWindow* w = mainWindow.load(std::memory_order_acquire)) {
 
 			bool downloaded = false;
 			// The installation directory, not the one the process was started from.
@@ -3363,11 +3381,10 @@ public:
 				qint64 el = QDateTime::currentMSecsSinceEpoch() - st;
 				int sleep = 200 - el;
 				QThread::msleep(sleep > 0 ? sleep : 0);
-				if (!mainWindow)
+				if (!mainWindow.load(std::memory_order_relaxed))
 					break;
 			}
 		}
-		delete update;
 	}
 };
 
@@ -3618,10 +3635,10 @@ VipMainWindow::~VipMainWindow()
 	d_data->fileTimer.stop();
 	disconnect(&d_data->fileTimer, SIGNAL(timeout()), this, SLOT(openSharedMemoryFiles()));
 
+	stopUpdateThread();
 	if (d_data->updateThread) {
-		d_data->updateThread->mainWindow = nullptr;
-		d_data->updateThread->wait();
 		delete d_data->updateThread;
+		d_data->updateThread = nullptr;
 	}
 
 	d_data.clear();
@@ -5636,7 +5653,8 @@ void VipMainWindow::startUpdateThread()
 	stopUpdateThread();
 	if (!d_data->updateThread)
 		d_data->updateThread = new UpdateThread(this);
-	d_data->updateThread->mainWindow = this;
+	// Read there, in the thread that owns the widgets.
+	d_data->updateThread->bindTo(this);
 	d_data->updateThread->start();
 }
 
@@ -5644,7 +5662,13 @@ void VipMainWindow::stopUpdateThread()
 {
 	if (d_data->updateThread) {
 		d_data->updateThread->mainWindow = nullptr;
-		d_data->updateThread->wait();
+		// Bounded: the turn in progress can sit in a network call that carries no
+		// deadline of its own. Destroying a running thread aborts, so the bound is
+		// a diagnostic rather than a way out.
+		if (!d_data->updateThread->wait(30000)) {
+			VIP_LOG_WARNING("Update thread still running after 30s, waiting for it");
+			d_data->updateThread->wait();
+		}
 	}
 }
 

@@ -2042,9 +2042,11 @@ namespace detail
 	}
 } // end detail
 
-/// Apply convert function inplace on given possibly strided N-D array
+/// Apply convert function inplace on given possibly strided N-D array.
+///  max_threads bounds the parallelism: pass 1 for a function that must see the
+/// elements one at a time and in order, such as one writing them to a stream.
 template<class T, class Fun>
-bool vipInplaceArrayTransform(T* in, const VipNDArrayShape& in_shape, const VipNDArrayShape& in_strides, Fun c)
+bool vipInplaceArrayTransform(T* in, const VipNDArrayShape& in_shape, const VipNDArrayShape& in_strides, Fun c, int max_threads = 0)
 {
 	bool in_unstrided;
 	qsizetype size_in = vipShapeToSize(in_shape, in_strides, &in_unstrided);
@@ -2052,6 +2054,8 @@ bool vipInplaceArrayTransform(T* in, const VipNDArrayShape& in_shape, const VipN
 		return false;
 
 	int threads = vipLoopThreadCount(size_in);
+	if (max_threads > 0 && threads > max_threads)
+		threads = max_threads;
 
 	if (in_unstrided) {
 		if constexpr (std::is_same_v<Fun, VipNullTransform>) {

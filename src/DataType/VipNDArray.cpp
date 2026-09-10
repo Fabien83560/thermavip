@@ -835,10 +835,11 @@ static bool canConvert(int from, int to)
 int vipHigherArrayType(int t1, int t2)
 {
 
-	static bool init = false;
-	static QMap<int, int> type_to_level;
-	if (!init) {
-		init = true;
+	// A function local static, built once and published complete: the flag was set
+	// before the table was filled, so a second thread skipped the block and read a
+	// half built table, and two threads could fill it at the same time.
+	static const QMap<int, int> type_to_level = [] {
+		QMap<int, int> type_to_level;
 		int level = 0;
 		type_to_level[QMetaType::Bool] = level++;
 		type_to_level[QMetaType::UChar] = level++;
@@ -857,7 +858,8 @@ int vipHigherArrayType(int t1, int t2)
 		type_to_level[qMetaTypeId<long double>()] = level++;
 		type_to_level[qMetaTypeId<complex_f>()] = level++;
 		type_to_level[qMetaTypeId<complex_d>()] = level++;
-	}
+		return type_to_level;
+	}();
 
 	if (t1 == t2)
 		return t1;

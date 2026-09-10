@@ -686,7 +686,12 @@ namespace detail
 					o.setFloatingPointPrecision(QDataStream::DoublePrecision);
 				else
 					o.setFloatingPointPrecision(QDataStream::SinglePrecision);
-				vipInplaceArrayTransform(static_cast<T*>(opaque) + vipFlatOffset<false>(strides, _start), _shape, strides, out);
+				// One thread: this functor writes each element into a single stream,
+				// and the transform is parallel as soon as the iteration thread count
+				// is raised. Several threads would race on the stream and, even
+				// without corrupting it, would write the elements out of order, which
+				// the reader has no way of noticing.
+				vipInplaceArrayTransform(static_cast<T*>(opaque) + vipFlatOffset<false>(strides, _start), _shape, strides, out, 1);
 			}
 			return o;
 		}
@@ -700,7 +705,9 @@ namespace detail
 					in.stream = &i;
 					in.LD_support = i.device()->property("_vip_LD").toUInt();
 					i.setFloatingPointPrecision(QDataStream::DoublePrecision);
-					vipInplaceArrayTransform(static_cast<long double*>(opaque) + vipFlatOffset<false>(strides, _start), _shape, strides, in);
+					// One thread, as for writing: the elements come out of the stream
+					// in one order and must be stored in that order.
+					vipInplaceArrayTransform(static_cast<long double*>(opaque) + vipFlatOffset<false>(strides, _start), _shape, strides, in, 1);
 				}
 				else {
 					Istream<T> in;
@@ -710,7 +717,7 @@ namespace detail
 						i.setFloatingPointPrecision(QDataStream::DoublePrecision);
 					else
 						i.setFloatingPointPrecision(QDataStream::SinglePrecision);
-					vipInplaceArrayTransform(static_cast<T*>(opaque) + vipFlatOffset<false>(strides, _start), _shape, strides, in);
+					vipInplaceArrayTransform(static_cast<T*>(opaque) + vipFlatOffset<false>(strides, _start), _shape, strides, in, 1);
 				}
 			}
 			return i;
@@ -733,7 +740,7 @@ namespace detail
 				Otextstream ou;
 				ou.stream = &stream;
 				ou.sep = separator;
-				vipInplaceArrayTransform(static_cast<T*>(opaque) + vipFlatOffset<false>(strides, _start), _shape, strides, ou);
+				vipInplaceArrayTransform(static_cast<T*>(opaque) + vipFlatOffset<false>(strides, _start), _shape, strides, ou, 1);
 			}
 			return stream;
 		}

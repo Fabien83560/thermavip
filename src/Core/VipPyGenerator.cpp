@@ -38,9 +38,9 @@
 
 void VipPySignalGenerator::ReadThread::run()
 {
-	if (VipPySignalGenerator* gen = generator)
+	if (VipPySignalGenerator* gen = generator.load(std::memory_order_acquire))
 		gen->m_startTime = QDateTime::currentMSecsSinceEpoch();
-	while (VipPySignalGenerator* gen = generator) {
+	while (VipPySignalGenerator* gen = generator.load(std::memory_order_acquire)) {
 		qint64 time = QDateTime::currentMSecsSinceEpoch();
 
 		qint64 st = time;

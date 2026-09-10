@@ -459,6 +459,14 @@ namespace detail
 /// - invalid functor expression for the destination type (trying to convolve an array of QString will return false).
 /// 
 /// This function will never reset the dst array.
+///
+/// Re-entrance, imposed on the src functor: its operator() and operator[] are
+/// called concurrently by several threads as soon as vipSetIterateThreadCount()
+/// was given more than one and dst holds more than a few thousand elements. A
+/// functor must therefore keep no working state of its own: buffers belong to
+/// the call, not to the object. A functor that ignores this runs correctly on
+/// small arrays and on one thread, and returns wrong values in production, with
+/// nothing to say so.
 /// 
 /// vipEval() is also used to evaluate reduction algorithms (inheriting detail::BaseReductor) and array algorithms (inheriting detail::ArrayAlgorithm).
 /// For instance, vipResize() uses internally vipEval() to apply a resizing algorithm.

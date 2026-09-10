@@ -384,6 +384,11 @@ def interpret_input():
     """
     code = readInput(1)
     if len(code) == 0:
+        # End of file: the parent has closed the pipe or died. This used to read
+        # as a simple absence of data, so the loops below span at a hundred turns
+        # a second for ever and every run of the application left an interpreter
+        # behind, holding a whole CPython and numpy, with no window to close.
+        globals()["__stop_loop"] = True
         return None
     if __debug_on : __debug("received")
     
@@ -493,6 +498,7 @@ class RedirectIn:
     
     def readline(self):
         send_wait_for_input()
+        # Ends on end of file as well, and says so the way a file does.
         while globals()["__stop_loop"] == False:
             try:
                 line = interpret_input()
@@ -511,8 +517,11 @@ class RedirectIn:
                 l = repr(traceback.format_exception(exc_type, exc_value,exc_traceback))
                 #if globals()["__debug_on"] : __debug(''.join(l) )
                 pass
-                
-        
+
+        # Nothing more will come: say end of file the way a file does, so that
+        # input() raises instead of the caller looping for ever.
+        return ''
+
     def fileno(self): return 0       
     def clear(self): pass
     def flush(self): pass
@@ -541,6 +550,8 @@ def main_loop():
     while globals()["__stop_loop"] == False:
         try:
             interpret_input()
+            if globals()["__stop_loop"]:
+                break
             time.sleep(0.01)
         except SystemExit:
             if __debug_on : __debug("SystemExit")

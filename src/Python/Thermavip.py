@@ -102,11 +102,14 @@ except:
                 self.traceback = traceback.format_exc()
                 #self.stdout.write("CallAfter.call exception\n");self.stdout.flush()
                 
-        @pyqtSlot()
-        def callLine(self):
+        # The code arrives as an argument. Held in an attribute, the queued call
+        # below read whatever the next message had already written there: one line
+        # lost, the next one run twice.
+        @pyqtSlot(str)
+        def callLine(self, code):
             self.traceback = None
             try:
-                _ipython_interp.execLine(self.code)
+                _ipython_interp.execLine(code)
             except:
                 import traceback
                 self.traceback = traceback.format_exc()
@@ -276,9 +279,7 @@ except:
                         if _ipython_interp:
                             #_ipython_interp.execInKernel(tmp[1])
                             #self.stdout.write("exec line "+tmp[1]+"\n");self.stdout.flush()
-                            self.code = tmp[1]
-                            
-                            core.QMetaObject.invokeMethod(self, "callLine", core.Qt.BlockingQueuedConnection)
+                            core.QMetaObject.invokeMethod(self, "callLine", core.Qt.BlockingQueuedConnection, core.Q_ARG(str, tmp[1]))
                             #core.QMetaObject.invokeMethod(_ipython_interp, "hide", core.Qt.QueuedConnection)
                             #core.QCoreApplication.instance().processEvents()
                             #self.stdout.write("end line\n");self.stdout.flush()
@@ -297,8 +298,7 @@ except:
                 if tmp[0]:
                     try:
                         if _ipython_interp:
-                            self.code = tmp[1]
-                            core.QMetaObject.invokeMethod(self, "callLine", core.Qt.QueuedConnection)
+                            core.QMetaObject.invokeMethod(self, "callLine", core.Qt.QueuedConnection, core.Q_ARG(str, tmp[1]))
                         else:
                             exec(tmp[1])
                         
@@ -507,16 +507,18 @@ except:
                 else:
                     return True
                     
-        def write(self,data, milli_timeout = -1):
+        def write(self,data, milli_timeout = 30000):
         
             # By exception, not by a returned flag: the six callers of this all
             # ignored the flag, and the read that followed a lost write waited for
             # an answer to a request that was never sent, with the lock held.
+            # A finite default, like read: none of those callers passed one, so the
+            # wait below never ended if the other side stopped answering, and it is
+            # held under the lock that the service thread needs to make progress.
             if not self.isAttached():
                 raise RuntimeError('shared memory is not attached')
             
-            start = core.QDateTime.currentMSecsSinceEpoch()
-            until = start + milli_timeout
+            until = core.QDateTime.currentMSecsSinceEpoch() + milli_timeout
             if milli_timeout == -1:
                 until = -1
             
@@ -574,6 +576,7 @@ except:
                 # already carries the bound the writer applies.
                 if s < 0 or s > self.header.max_msg_size:
                     zero = b'\x00'*4
+                    self.lock()
                     ctypes.memmove(int(self.data()) + self.header.offset_read, zero, 4)
                     ctypes.memmove(int(self.data()) + self.header.offset_read+4, zero, 4)
                     self.unlock()

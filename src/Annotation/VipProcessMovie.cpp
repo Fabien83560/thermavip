@@ -303,13 +303,17 @@ public:
 	{
 		QTcpSocket connection;
 		VipClientEventDevice* dev = parent.load();
-		if (!dev)
+		if (!dev) {
+			// The caller waits on this status: leaving it at zero froze it.
+			status = -1;
 			return;
+		}
 
 		QString path = dev->removePrefix(dev->path());
 		QStringList lst = path.split(";", VIP_SKIP_BEHAVIOR::SkipEmptyParts);
 		if (lst.size() != 3) {
 			VIP_LOG_ERROR("Wrong path format: ", path);
+			status = -1;
 			return;
 		}
 
@@ -447,13 +451,20 @@ bool VipClientEventDevice::enableStreaming(bool enable)
 		d_data->parent = this;
 		d_data->start();
 
-		// wait for status
-		while (d_data->status.load() == 0)
+		// Wait for status, with a bound. This runs in the thread of the interface,
+		// and the thread above can end without saying anything at all.
+		const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 5000;
+		while (d_data->status.load() == 0 && QDateTime::currentMSecsSinceEpoch() < deadline)
 			vipSleep(10);
-		if (d_data->status.load() < 0) {
+
+		if (d_data->status.load() == 0)
+			VIP_LOG_ERROR("Timeout while connecting to the event server");
+
+		if (d_data->status.load() <= 0) {
 			d_data->parent = nullptr;
 			d_data->wait();
 			VIP_CREATE_PRIVATE_DATA();
+			return false;
 		}
 	}
 

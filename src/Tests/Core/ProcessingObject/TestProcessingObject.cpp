@@ -9,13 +9,41 @@
 #include "vip_test_main.h"
 
 #include "VipProcessingObject.h"
+#include "VipProcessingSnapshot.h"
 #include "VipImageProcessing.h"
 #include "VipStandardProcessing.h"
 #include "VipStreamingFromDevice.h"
 #include "VipXmlArchive.h"
 
 #include <atomic>
+#include <functional>
 #include <memory>
+#include <QElapsedTimer>
+#include <QThread>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <ctime>
+#endif
+
+/// Processor time charged to the calling thread, in milliseconds. A wait that
+/// sleeps leaves it flat; a wait that spins makes it follow the clock.
+static qint64 processorMilliseconds()
+{
+#ifdef _WIN32
+	FILETIME creation, exited, kernel, user;
+	if (!GetThreadTimes(GetCurrentThread(), &creation, &exited, &kernel, &user))
+		return 0;
+	const auto toMs = [](const FILETIME& f) { return ((static_cast<qint64>(f.dwHighDateTime) << 32) | f.dwLowDateTime) / 10000; };
+	return toMs(kernel) + toMs(user);
+#else
+	timespec ts;
+	if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0)
+		return 0;
+	return static_cast<qint64>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Test processings, kept to the strict minimum.
@@ -64,6 +92,54 @@ public:
 
 protected:
 	void apply() override { outputAt(0)->setData(create(QVariant(inputAt(0)->data().value<double>() + 1.0))); }
+};
+
+/// Takes a long time and no processor while doing so.
+class SlowProcessing : public VipProcessingObject
+{
+	Q_OBJECT
+	VIP_IO(VipInput input)
+	VIP_IO(VipOutput output)
+
+public:
+	SlowProcessing(QObject* parent = nullptr)
+	  : VipProcessingObject(parent)
+	{
+	}
+
+protected:
+	void apply() override
+	{
+		QThread::msleep(400);
+		outputAt(0)->setData(create(inputAt(0)->data().data()));
+	}
+};
+
+/// Reports when the list propagates its source properties to it. The hook is
+/// the shortest reimplemented virtual the list calls while it inserts.
+class WatchingProcessing : public VipProcessingObject
+{
+	Q_OBJECT
+	VIP_IO(VipInput input)
+	VIP_IO(VipOutput output)
+
+public:
+	std::function<void()> onSourceProperty;
+
+	WatchingProcessing(QObject* parent = nullptr)
+	  : VipProcessingObject(parent)
+	{
+	}
+
+	void setSourceProperty(const char* name, const QVariant& value) override
+	{
+		if (onSourceProperty)
+			onSourceProperty();
+		VipProcessingObject::setSourceProperty(name, value);
+	}
+
+protected:
+	void apply() override { outputAt(0)->setData(create(inputAt(0)->data().data())); }
 };
 
 /// Carries a multi input, so the container operations can be exercised.
@@ -826,6 +902,27 @@ private Q_SLOTS:
 		QCOMPARE(second.property("campaign").toInt(), 7);
 	}
 
+	/// update() walks its sources while holding its own lock, and that lock does
+	/// not nest. Two processings that are sources of each other brought the walk
+	/// back to the first one on the same thread, onto the lock it was already
+	/// holding, and nothing came back from there.
+	void aCycleInTheSourcesDoesNotBlockUpdate()
+	{
+		MultiplyByProperty first;
+		MultiplyByProperty second;
+		first.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::NoThread);
+		second.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::NoThread);
+
+		QVERIFY(first.outputAt(0)->setConnection(second.inputAt(0)));
+		QVERIFY(second.outputAt(0)->setConnection(first.inputAt(0)));
+
+		first.inputAt(0)->setData(makeData(2.0));
+		QVERIFY(first.update(true));
+
+		QCOMPARE(first.applyCount.load(), 1);
+		QCOMPARE(first.outputAt(0)->data().value<double>(), 4.0);
+	}
+
 	/// The reader dropped the connections and wrote the object as it went, so an
 	/// archive that stops after the first field left a disconnected object
 	/// carrying default values. It now applies nothing at all.
@@ -891,6 +988,392 @@ private Q_SLOTS:
 
 		QVERIFY2(observed.isNull(), "a device that is taken but not kept must be destroyed");
 		QCOMPARE(streaming.IODevice(), (VipIODevice*)inner);
+	}
+
+	/// The signal that says a processing is done reaches a processing list in a
+	/// direct connection, and that list then takes its own mutex; the list, while
+	/// holding that mutex, runs its children, which take the lock serialising a
+	/// run. Two threads closed the cycle, so the signal now goes out once that
+	/// lock is released, through a flag the run leaves behind. This pins the
+	/// contract of that flag: one signal per run, no more and no less.
+	void processingDoneIsEmittedOncePerRun()
+	{
+		MultiplyByProperty processing;
+		processing.inputAt(0)->setData(VipAnyData(QVariant(2.0), 0));
+
+		processing.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::NoThread);
+
+		// Running again from the slot needs the lock that serialises a run, and that
+		// lock does not nest: emitted from under it, this call spins for ever.
+		int depth = 0;
+		QObject::connect(&processing,
+				 &VipProcessingObject::processingDone,
+				 &processing,
+				 [&](VipProcessingObject* obj, qint64) {
+					 ++depth;
+				 },
+				 Qt::DirectConnection);
+
+		QVERIFY(processing.update(true));
+		QCOMPARE(depth, 1);
+
+		QVERIFY(processing.update(true));
+		QCOMPARE(depth, 2);
+	}
+
+	/// The manager is read from the thread that processes and written from the
+	/// thread that configures. The set of error codes and the map of priorities
+	/// were read without the mutex that guards the writes, and a Qt container
+	/// being rehashed is not readable. This exercises both sides at once.
+	void theManagerSurvivesConcurrentConfiguration()
+	{
+		const QSet<int> initial = VipProcessingManager::logErrors();
+		const qint64 initialMemory = VipProcessingManager::maxListMemory();
+
+		std::atomic<bool> stop{ false };
+		std::atomic<int> reads{ 0 };
+
+		QThread* reader = QThread::create([&]() {
+			while (!stop.load()) {
+				VipProcessingManager::logErrors();
+				VipProcessingManager::defaultPriorities();
+				VipProcessingManager::maxListMemory();
+				VipProcessingManager::listLimitType();
+				++reads;
+			}
+		});
+		reader->start();
+
+		// The writer below is short: without this the reader could still be
+		// starting when it ends, and the count asserted at the end would be zero.
+		QElapsedTimer started;
+		started.start();
+		while (reads.load() == 0 && started.elapsed() < 30000)
+			QThread::msleep(1);
+
+		for (int i = 0; i < 200; ++i) {
+			VipProcessingManager::setLogErrorEnabled(VipProcessingObject::RuntimeError, i % 2 == 0);
+			VipProcessingManager::setMaxListMemory(40000000 + i);
+		}
+
+		stop.store(true);
+		QVERIFY(reader->wait(30000));
+		delete reader;
+
+		QVERIFY2(reads.load() > 0, "the reader must have run");
+
+		VipProcessingManager::setLogErrors(initial);
+		VipProcessingManager::setMaxListMemory(initialMemory);
+		QCOMPARE(VipProcessingManager::maxListMemory(), initialMemory);
+	}
+
+	/// The list ran its whole pipeline holding the mutex that guards its
+	/// container, so anything else that only wanted to look at the list waited
+	/// behind every processing. Looking at it from inside a processing of that
+	/// same list is the shortest way to show the mutex is no longer held: the
+	/// mutex nests, but only for the thread that owns it, and this is the thread
+	/// that runs the pipeline.
+	void theListDoesNotHoldItsMutexWhileRunning()
+	{
+		VipProcessingList list;
+		AddOne* first = new AddOne();
+		QVERIFY(list.append(first));
+
+		bool sourcesRead = false;
+		QObject::connect(first,
+				 &VipProcessingObject::processingDone,
+				 &list,
+				 [&](VipProcessingObject*, qint64) {
+					 // Reads the container under the mutex.
+					 list.directSources();
+					 sourcesRead = true;
+				 },
+				 Qt::DirectConnection);
+
+		list.inputAt(0)->setData(VipAnyData(QVariant(1.0), 0));
+		QVERIFY(list.update(true));
+		list.wait();
+
+		QVERIFY2(sourcesRead, "the container must be readable while the pipeline runs");
+		QCOMPARE(list.outputAt(0)->data().value<double>(), 2.0);
+	}
+
+	/// The pool thread held the mutex of the pool for the whole processing, so
+	/// every bounded wait spun in try_lock_for until the processing was over:
+	/// the calling thread, most often the one of the interface, burnt a core for
+	/// as long as the work lasted. The wait now sleeps on the condition, which
+	/// shows as processor time far below the elapsed time.
+	void waitingForAProcessingDoesNotBurnTheProcessor()
+	{
+		SlowProcessing proc;
+		proc.setComputeTimeStatistics(false);
+		proc.setScheduleStrategy(VipProcessingObject::Asynchronous, true);
+		proc.inputAt(0)->setData(makeData(1.0));
+		QVERIFY(proc.update());
+
+		const qint64 processorBefore = processorMilliseconds();
+		QElapsedTimer timer;
+		timer.start();
+		proc.wait(false, 200);
+		const qint64 elapsed = timer.elapsed();
+		const qint64 processor = processorMilliseconds() - processorBefore;
+
+		QVERIFY2(elapsed >= 150, qPrintable(QString("the wait returned after %1 ms, it did not wait").arg(elapsed)));
+		QVERIFY2(processor * 2 < elapsed, qPrintable(QString("%1 ms of processor time for %2 ms of wait").arg(processor).arg(elapsed)));
+
+		QVERIFY(proc.wait(false, 30000));
+	}
+
+	/// update() took a spinlock and kept it across the wait for the result, so a
+	/// second call from another thread span on it for the whole processing. The
+	/// lock is now released before that wait, and what an update in flight is
+	/// answered by a counter rather than by the state of the lock.
+	void aSecondUpdateDoesNotSpinOnTheFirst()
+	{
+		SlowProcessing proc;
+		proc.setComputeTimeStatistics(false);
+		proc.inputAt(0)->setData(makeData(1.0));
+
+		std::atomic<bool> updatingSeen{ false };
+		QThread* first = QThread::create([&]() {
+			proc.update(true);
+		});
+		first->start();
+
+		// Let the first call reach its wait.
+		QThread::msleep(100);
+		updatingSeen = proc.isUpdating();
+
+		const qint64 processorBefore = processorMilliseconds();
+		QElapsedTimer timer;
+		timer.start();
+		proc.update(true);
+		const qint64 elapsed = timer.elapsed();
+		const qint64 processor = processorMilliseconds() - processorBefore;
+
+		QVERIFY(first->wait(30000));
+		delete first;
+
+		QVERIFY2(updatingSeen.load(), "an update waiting for its result is still an update in flight");
+		QVERIFY2(elapsed >= 200, qPrintable(QString("the second update returned after %1 ms").arg(elapsed)));
+		QVERIFY2(processor * 4 < elapsed, qPrintable(QString("%1 ms of processor time for %2 ms of update").arg(processor).arg(elapsed)));
+	}
+
+	/// A run that finds no new input asks the pool to drop what is scheduled.
+	/// Asked for from a thread that is not the one of the pool, the request
+	/// simply stayed armed, and the pool then threw away the first batch it woke
+	/// up for: real work, pushed after the skip, silently lost.
+	void skippingForLackOfInputDoesNotLoseTheNextTask()
+	{
+		MultiplyByProperty proc;
+		proc.setComputeTimeStatistics(false);
+
+		// Asynchronous first, so the pool exists and runs one real input.
+		proc.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::SkipIfNoInput | VipProcessingObject::Asynchronous);
+		proc.inputAt(0)->setData(makeData(1.0));
+		QVERIFY(proc.wait(true, 30000));
+		QCOMPARE(proc.applyCount.load(), 1);
+
+		// A forced run in the calling thread, with nothing new on the input: this
+		// is the skip, and the pool is idle at that moment.
+		proc.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::SkipIfNoInput | VipProcessingObject::NoThread);
+		QVERIFY(proc.update(true));
+		QCOMPARE(proc.applyCount.load(), 1);
+
+		// Back to the pool, with real input.
+		proc.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::SkipIfNoInput | VipProcessingObject::Asynchronous);
+		proc.inputAt(0)->setData(makeData(3.0));
+		QVERIFY(proc.wait(true, 30000));
+
+		QCOMPARE(proc.applyCount.load(), 2);
+		QCOMPARE(proc.outputAt(0)->data().value<double>(), 6.0);
+	}
+
+	/// Inserting a processing propagated the source properties of the list while
+	/// holding the mutex of the list. That propagation is a virtual reimplemented
+	/// outside the library, plugins included, and every other thread that only
+	/// wanted the size of the list waited behind it.
+	void insertingDoesNotHoldTheMutexWhileItCallsTheProcessing()
+	{
+		VipProcessingList list;
+		list.setSourceProperty("test_property", QVariant(1));
+
+		WatchingProcessing* proc = new WatchingProcessing();
+		bool readInTime = false;
+		QThread* reader = nullptr;
+		proc->onSourceProperty = [&]() {
+			if (reader)
+				return;
+			reader = QThread::create([&]() { list.size(); });
+			reader->start();
+			// Answered here, while the insert is still on the stack: joined after
+			// it returns, the read always gets through in the end.
+			readInTime = reader->wait(1000);
+		};
+
+		QVERIFY(list.insert(0, proc));
+
+		QVERIFY(reader);
+		QVERIFY(reader->wait(30000));
+		delete reader;
+
+		QVERIFY2(readInTime, "the list must be readable while it configures a processing");
+	}
+
+	/// The error was handed out by reference and deleted by the next setError()
+	/// or resetError(), on a class whose documentation invites any thread to read
+	/// it and which resets before every run. The reader now holds a share of what
+	/// it reads. Meant to be run under a sanitiser, where the old code reports a
+	/// read of freed memory.
+	void readingTheErrorWhileItIsReplacedIsSafe()
+	{
+		MultiplyByProperty proc;
+		proc.setLogErrors(QSet<int>());
+
+		std::atomic<bool> stop{ false };
+		std::atomic<int> seen{ 0 };
+
+		QThread* reader = QThread::create([&]() {
+			while (!stop.load()) {
+				const VipErrorData err = proc.errorData();
+				if (!err.errorString().isEmpty())
+					++seen;
+				proc.errorString();
+				proc.errorCode();
+				proc.hasError();
+			}
+		});
+		reader->start();
+
+		QElapsedTimer started;
+		started.start();
+		while (seen.load() == 0 && started.elapsed() < 30000) {
+			proc.setError("replaced", -2);
+			proc.resetError();
+		}
+		for (int i = 0; i < 5000; ++i) {
+			proc.setError("replaced", -2);
+			proc.resetError();
+		}
+
+		stop.store(true);
+		QVERIFY(reader->wait(30000));
+		delete reader;
+
+		QVERIFY2(seen.load() > 0, "the reader must have seen an error");
+		QVERIFY(!proc.hasError());
+	}
+
+	/// Asking which processings accept a list of inputs resized the multi input
+	/// of every candidate prototype to the size of that list. The prototypes are
+	/// shared for the life of the process, so the answer depended on the previous
+	/// question, and two questions at once wrote the same container.
+	void queryingTheProcessingsLeavesThePrototypesAlone()
+	{
+		const QList<const VipProcessingObject*> all = VipProcessingObject::allObjects();
+
+		QMap<const VipProcessingObject*, int> before;
+		for (const VipProcessingObject* obj : all)
+			if (obj->topLevelInputCount() > 0)
+				if (VipMultiInput* multi = obj->topLevelInputAt(0)->toMultiInput())
+					if (multi->minSize() <= 3 && multi->maxSize() >= 3)
+						before[obj] = multi->count();
+
+		QVERIFY2(!before.isEmpty(), "the library must register at least one multi input processing");
+
+		QVariantList three;
+		three << QVariant(1.0) << QVariant(2.0) << QVariant(3.0);
+		VipProcessingObject::validProcessingObjects<VipProcessingObject*>(three);
+
+		for (QMap<const VipProcessingObject*, int>::const_iterator it = before.begin(); it != before.end(); ++it)
+			QCOMPARE(it.key()->topLevelInputAt(0)->toMultiInput()->count(), it.value());
+	}
+
+	/// The snapshot is documented as something one side fills in real time while
+	/// the other displays it, and its accessors are part of a family the base
+	/// class declares thread safe. They read maps and a structure the loader
+	/// writes, and neither side took a lock. Meant to be run under a sanitiser.
+	void readingASnapshotWhileItIsLoadedIsSafe()
+	{
+		VipProcessingPool source;
+		MultiplyByProperty* origin = new MultiplyByProperty(&source);
+		origin->setObjectName("multiply");
+
+		const QByteArray snapshot = vipSaveBinarySnapshot(&source);
+		QVERIFY(!snapshot.isEmpty());
+
+		VipProcessingPool target;
+		QVERIFY(vipLoadBinarySnapshot(&target, snapshot));
+
+		const QList<VipProcessingObject*> loaded = target.findChildren<VipProcessingObject*>();
+		QVERIFY2(!loaded.isEmpty(), "the snapshot must have created a processing");
+
+		std::atomic<bool> stop{ false };
+		std::atomic<int> reads{ 0 };
+		QThread* reader = QThread::create([&]() {
+			while (!stop.load()) {
+				for (VipProcessingObject* obj : loaded) {
+					obj->inputDescription("input");
+					obj->outputDescription("output");
+					obj->info();
+					obj->processingTime();
+					++reads;
+				}
+			}
+		});
+		reader->start();
+
+		QElapsedTimer started;
+		started.start();
+		while (reads.load() == 0 && started.elapsed() < 30000)
+			QThread::msleep(1);
+
+		for (int i = 0; i < 300; ++i)
+			QVERIFY(vipLoadBinarySnapshot(&target, snapshot));
+
+		stop.store(true);
+		QVERIFY(reader->wait(30000));
+		delete reader;
+
+		QVERIFY2(reads.load() > 0, "the reader must have run");
+	}
+
+	/// A connection walks its peers by index every time a datum goes out, while
+	/// connecting and disconnecting empties and reallocates that same vector.
+	/// Nothing stood between the two. Meant to be run under a sanitiser, where
+	/// the old code reads past the end or into freed memory.
+	void sendingWhileTheGraphIsRewiredIsSafe()
+	{
+		MultiplyByProperty source;
+		MultiplyByProperty first;
+		MultiplyByProperty second;
+		source.setComputeTimeStatistics(false);
+
+		QVERIFY(source.outputAt(0)->setConnection(first.inputAt(0)));
+
+		std::atomic<bool> stop{ false };
+		std::atomic<int> sends{ 0 };
+		QThread* sender = QThread::create([&]() {
+			while (!stop.load()) {
+				source.outputAt(0)->setData(makeData(1.0));
+				++sends;
+			}
+		});
+		sender->start();
+
+		QElapsedTimer started;
+		started.start();
+		while (sends.load() == 0 && started.elapsed() < 30000)
+			QThread::msleep(1);
+
+		for (int i = 0; i < 2000; ++i)
+			source.outputAt(0)->setConnection((i % 2) ? first.inputAt(0) : second.inputAt(0));
+
+		stop.store(true);
+		QVERIFY(sender->wait(30000));
+		delete sender;
+
+		QVERIFY2(sends.load() > 0, "the sender must have run");
 	}
 };
 

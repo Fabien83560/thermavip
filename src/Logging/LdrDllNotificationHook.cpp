@@ -151,8 +151,16 @@ static VOID RemoveEntryList(PLIST_ENTRY pEntry)
 	pEntry->Flink->Blink = pEntry->Blink;
 }
 
+// Installed at most once. The list edited below is walked by the loader of the
+// system under a lock this code has no access to, so the window is only closed
+// by doing it once, from the main thread, before any other thread exists.
+static bool g_hookInstalled = false;
+
 BOOL HookLdrDllNotifications(PLDR_DLL_NOTIFICATION_FUNCTION_HOOK hook)
 {
+	if (g_hookInstalled)
+		return TRUE;
+
 	HMODULE hNtdll = GetModuleHandle(L"ntdll.dll");
 	if (!hNtdll)
 	{
@@ -199,6 +207,7 @@ BOOL HookLdrDllNotifications(PLDR_DLL_NOTIFICATION_FUNCTION_HOOK hook)
 
 	InsertHeadList(head, &g_hookDllNotificationBlock.Links);
 
+	g_hookInstalled = true;
 	return TRUE;
 }
 
@@ -207,6 +216,8 @@ void UnhookLdrDllNotifications()
 	// Nothing installed: the block is a zero initialised static, and unlinking it
 	// writes through a null pointer. Called without a successful Hook, which is
 	// what an ignored failure produces, this used to take the process down.
+	if (!g_hookInstalled)
+		return;
 	if (!g_hookDllNotificationBlock.Links.Flink || !g_hookDllNotificationBlock.Links.Blink)
 		return;
 
@@ -230,4 +241,5 @@ void UnhookLdrDllNotifications()
 	}
 
 	ClearHookContextArray();
+	g_hookInstalled = false;
 }
