@@ -489,17 +489,16 @@ void VipBaseDragWidget::setInternalVisibility(VisibilityState state)
 
 void VipBaseDragWidget::setVisibility(VisibilityState state)
 {
-	// if(state != d_data->visibility)
-	{
-		if (state == Normal)
-			this->showNormal();
-		else if (state == Maximized)
-			this->showMaximized();
-		else
-			this->showMinimized();
-
-		d_data->visibility = state;
-	}
+	// The three calls below record the state themselves, and each of them
+	// refuses to do anything when the widget does not support it. Recording it
+	// here as well made the widget claim to be maximised while it was shown
+	// normally, and no change was ever signalled.
+	if (state == Normal)
+		this->showNormal();
+	else if (state == Maximized)
+		this->showMaximized();
+	else
+		this->showMinimized();
 }
 
 void VipBaseDragWidget::showMaximized()
@@ -1196,8 +1195,8 @@ QWidget* VipDragWidget::widget() const
 void VipDragWidget::setWidget(QWidget* widget)
 {
 	if (d_data->widget) {
-		disconnect(d_data->widget, SIGNAL(windowTitleChanged(const QString&)), this, SLOT(titleChanged()));
-		disconnect(d_data->widget, SIGNAL(windowIconChanged(const QIcon&)), this, SLOT(titleChanged()));
+		disconnect(d_data->widget, &QWidget::windowTitleChanged, this, &VipDragWidget::titleChanged);
+		disconnect(d_data->widget, &QWidget::windowIconChanged, this, &VipDragWidget::titleChanged);
 		d_data->widget->close();
 		d_data->widget->deleteLater();
 	}
@@ -1208,8 +1207,8 @@ void VipDragWidget::setWidget(QWidget* widget)
 
 	if (d_data->widget) {
 		d_data->widget->setFocusPolicy(Qt::StrongFocus);
-		connect(d_data->widget, SIGNAL(windowTitleChanged(const QString&)), this, SLOT(titleChanged()));
-		connect(d_data->widget, SIGNAL(windowIconChanged(const QIcon&)), this, SLOT(titleChanged()));
+		connect(d_data->widget, &QWidget::windowTitleChanged, this, &VipDragWidget::titleChanged);
+		connect(d_data->widget, &QWidget::windowIconChanged, this, &VipDragWidget::titleChanged);
 
 		vipSetDragWidget().callAllMatch(this, widget);
 	}

@@ -335,6 +335,8 @@ public:
 
 	/// Set the inner widget.
 	///  This function can be overloaded, but the new implementation must call the base version to ensure internal integrity.
+	///  Takes ownership: the widget previously set, if any, is closed and
+	///  scheduled for deletion, whether or not its closeEvent accepted.
 	virtual void setWidget(QWidget* widget);
 	/// Returns the inner widget
 	QWidget* widget() const;
