@@ -86,7 +86,8 @@ VipPlotVTKObject::~VipPlotVTKObject()
 	VipVTKGraphicsView* _old = qobject_cast<VipVTKGraphicsView*>(this->view());
 	if (_old) {
 		if (d_data->actor)
-			_old->renderers()[d_data->layer]->RemoveActor(d_data->actor);
+			if (vtkRenderer* ren = vipRendererForLayer(_old, d_data->layer))
+				ren->RemoveActor(d_data->actor);
 		_old->contours()->remove(this);
 	}
 	// Remove actor from previous renderer
@@ -244,7 +245,8 @@ void VipPlotVTKObject::setAxes(const QList<VipAbstractScale*>& axes, VipCoordina
 
 	if (_old && _old != _new) {
 		if (d_data->actor)
-			_old->renderers()[d_data->layer]->RemoveActor(d_data->actor);
+			if (vtkRenderer* ren = vipRendererForLayer(_old, d_data->layer))
+				ren->RemoveActor(d_data->actor);
 		_old->contours()->remove(this);
 	}
 
@@ -422,7 +424,11 @@ void VipPlotVTKObject::receiveSelectionChanged(VipPlotItem*)
 
 void VipPlotVTKObject::setSelectedColor(const QColor & c)
 {
-	if (d_data->color != c) {
+	// The field this assigns, as the three twin setters do. Testing the normal colour
+	// made this a no-op whenever the two happened to match, and made it reapply and
+	// notify whenever they did not, even with nothing to change. setPen() and
+	// setBrush(), which the style sheets and the editors call, both delegate here.
+	if (d_data->selectedColor != c) {
 		d_data->selectedColor = c;
 		applyPropertiesInternal();
 		emitItemChanged();
@@ -554,6 +560,17 @@ void VipPlotVTKObject::syncSelectionChanged(VipPlotItem*)
 		setSelected(it->isSelected());
 }
 
+// The renderer of a layer, or null when the index is out of range. The layer was
+// clamped below only when both the actor and the view exist, while the member is
+// assigned in every case and used as a subscript on three other sites.
+static vtkRenderer* vipRendererForLayer(VipVTKGraphicsView* view, int layer)
+{
+	if (!view)
+		return nullptr;
+	const auto& rens = view->renderers();
+	return (layer >= 0 && layer < rens.size()) ? rens[layer] : nullptr;
+}
+
 void VipPlotVTKObject::setLayer(int layer)
 {
 	if (layer < 0)
@@ -561,14 +578,16 @@ void VipPlotVTKObject::setLayer(int layer)
 	
 	if (layer != d_data->layer) {
 		VipVTKGraphicsView* view = qobject_cast<VipVTKGraphicsView*>(this->view());
+		// Clamped unconditionally, and only when there is a layer to clamp to: an empty
+		// list made size() - 1 equal to -1.
+		if (view && view->renderers().size() && layer >= view->renderers().size())
+			layer = view->renderers().size() - 1;
 		if (d_data->actor) {
 			if (view ) {
-				if (layer >= view->renderers().size())
-					layer = view->renderers().size() - 1;
-				vtkRenderer* ren = view->renderers()[d_data->layer];
-				ren->RemoveActor(d_data->actor);
-				ren = view->renderers()[layer];
-				ren->AddActor(d_data->actor);
+				if (vtkRenderer* ren = vipRendererForLayer(view, d_data->layer))
+					ren->RemoveActor(d_data->actor);
+				if (vtkRenderer* ren = vipRendererForLayer(view, layer))
+					ren->AddActor(d_data->actor);
 			}
 		}
 		d_data->layer = layer;
@@ -692,8 +711,8 @@ void VipPlotVTKObject::buildMapperAndActor(const VipVTKObject & obj, bool in_set
 			bool reset_camera = d_data->actor->GetNumberOfConsumers() == 0;
 
 			// Add actor to view (if not already done)
-			vtkRenderer* ren = view->renderers()[d_data->layer];
-			ren->AddActor(d_data->actor);
+			if (vtkRenderer* ren = vipRendererForLayer(view, d_data->layer))
+				ren->AddActor(d_data->actor);
 
 			if (!_vip_hidden)
 				view->contours()->add(this);

@@ -279,7 +279,10 @@ void VipDisplayObject::display(const VipAnyDataList& data)
 
 		// update parent VipAbstractPlayer title every 500 ms (no need for more in case of streaming)
 		qint64 time = QDateTime::currentMSecsSinceEpoch();
-		if (time - d_data->lastTitleUpdate > 500) {
+		// The object of this turn, not this one: the write on the next line already
+		// used it, so what was written was never read back, and one recently refreshed
+		// object in the batch suppressed the title of every other.
+		if (time - disp->d_data->lastTitleUpdate > 500) {
 			disp->d_data->lastTitleUpdate = time;
 			const VipAnyData data = dat.size() ? dat.back() : VipAnyData();
 			if (data.hasAttribute("Name") || data.hasAttribute("PlayerName")) {
@@ -288,7 +291,9 @@ void VipDisplayObject::display(const VipAnyDataList& data)
 				if (!title2.isEmpty())
 					title = title2;
 				if (disp->d_data->playerTitle != title) {
-					QWidget* player = findWidgetWith_automaticWindowTitle(widget());
+					// Its own widget: the title computed from the data of disp was applied to
+					// the window of this one.
+					QWidget* player = findWidgetWith_automaticWindowTitle(disp->widget());
 					if (player && !title.isEmpty()) {
 						if (player->property("automaticWindowTitle").toBool()) {
 							// vip_debug("set window title\n");

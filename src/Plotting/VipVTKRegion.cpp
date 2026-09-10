@@ -360,7 +360,14 @@ struct Point3D
 };
 size_t qHash(const Point3D& p)
 {
-	return vipHashBytes(&p, sizeof(p));
+	// Canonicalised first: the equality above is numeric and this hashes the bytes,
+	// and -0.0 == 0.0 while the two differ by a sign bit. This is the key that
+	// deduplicates the points of the rebuilt mesh, so a vertex produced by a mirror
+	// or a transform used to survive as a duplicate of its own twin.
+	double c[3];
+	for (int i = 0; i < 3; ++i)
+		c[i] = (p.p[i] == 0.0) ? 0.0 : p.p[i];
+	return vipHashBytes(c, sizeof(c));
 }
 
 VipVTKObject vipBuildRegionObject(const VipVTKRegion& r)
@@ -385,7 +392,11 @@ VipVTKObject vipBuildRegionObject(const VipVTKRegion& r)
 		if (!set)
 			continue;
 
+		// A rectilinear grid has no vtkPoints and answers null here, and this class is
+		// not restricted to point sets.
 		auto* set_points = set->GetPoints();
+		if (!set_points)
+			continue;
 		QHash<Point3D, vtkIdType> pts_to_id;
 
 		// Add the points and shift them toard the camera
@@ -482,10 +493,15 @@ QVector<QPair<QString, QVariant>> vipBuildRegionAttributes(const VipVTKRegion& r
 			auto lock = vipLockVTKObjects(obj);
 
 			if (vtkDataSet* set = obj.dataSet()) {
-				vtkPoints* pts = set->GetPoints();
+				const vtkIdType point_count = set->GetNumberOfPoints();
 				for (vtkIdType id : region.pointIds) {
+					// The generic accessor, valid for every kind of grid, and the identifier
+					// is checked: these come from a stored region and the object may have
+					// changed since.
+					if (id < 0 || id >= point_count)
+						continue;
 					double p[3];
-					pts->GetPoint(id, p);
+					set->GetPoint(id, p);
 					xmin = std::min(xmin, p[0]);
 					xmax = std::max(xmax, p[0]);
 					ymin = std::min(ymin, p[1]);
@@ -629,7 +645,7 @@ static size_t computeHash(const VipVTKRegion& region, const QVector<VipVTKObject
 			if (vtkDataSet* set = obj.dataSet()) {
 				// Hash points
 				auto* pts = set->GetPoints();
-				if (pts->GetNumberOfPoints()) {
+				if (pts && pts->GetNumberOfPoints()) {
 					size_t tmp = vipHashBytes(pts->GetData()->GetVoidPointer(0), pts->GetNumberOfPoints() * sizeof(double));
 					vipHashCombine(h, tmp);
 				}
