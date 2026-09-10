@@ -10,6 +10,7 @@
 #include "VipLogging.h"
 
 #include <qrandom.h>
+#include <qregularexpression.h>
 #include <qsharedmemory.h>
 #include <qdatetime.h>
 #include <qdatastream.h>
@@ -113,13 +114,25 @@ public:
 			// read an existing shared memory
 			d_mem.lock();
 			memcpy(&d_header, d_mem.data(), sizeof(d_header));
-			if (false) { //++d_header.connected > 2) {
+
+			// The five values come from a segment any process of the session can
+			// write. They were adopted as they stood and then used as offsets and
+			// lengths by memcpy, so a header that says the wrong thing reads and
+			// writes outside the mapping.
+			const int mapped = d_mem.size();
+			const int header_size = static_cast<int>(sizeof(d_header));
+			const bool sane = d_header.size == mapped && d_header.max_msg_size > 0 && d_header.max_msg_size <= mapped - header_size - 16 &&
+					  d_header.offset_read >= header_size && d_header.offset_write >= header_size &&
+					  d_header.offset_read <= mapped - 8 - d_header.max_msg_size && d_header.offset_write <= mapped - 8 - d_header.max_msg_size &&
+					  d_header.offset_read != d_header.offset_write;
+			if (!sane) {
 				d_mem.unlock();
 				d_mem.detach();
-				vip_debug("error: shared memory already in use");
-				VIP_LOG_ERROR("error: shared memory already in use");
+				vip_debug("error: shared memory header is not usable");
+				VIP_LOG_ERROR("error: shared memory header is not usable");
 				return;
 			}
+
 			memcpy(d_mem.data(), &d_header, sizeof(d_header));
 			// invert read and write offset if not main
 			if (!is_main)
@@ -474,11 +487,34 @@ protected:
 					if (!s1 || !s2 || !s3) {
 						continue;
 					}
+					// The three lengths come from the segment and used to size the
+					// buffers below as they stood: a negative one is undefined and a
+					// large one asks for an allocation the message cannot hold. The
+					// header already carries the bound the writer applies.
+					const int max_len = d_header.max_msg_size;
+					if (s1 < 0 || s2 < 0 || s3 < 0 || s1 > max_len || s2 > max_len || s3 > max_len || s1 + s2 + s3 > max_len) {
+						VIP_LOG_ERROR("Refused a message whose declared lengths do not fit");
+						continue;
+					}
 					// send pickle versions of variables. name is already the ascii function name.
 					QByteArray name(s1, 0), targs(s2, 0), dargs(s3, 0);
 					str.readRawData(name.data(), name.size());
 					str.readRawData(targs.data(), targs.size());
 					str.readRawData(dargs.data(), dargs.size());
+					// The name arrives from the segment. Pasted between quotes in
+					// the source below, a single apostrophe in it closed the literal
+					// and the rest ran as Python, in this process, with its rights.
+					// It is checked against what an identifier may be, then sent as
+					// an object like the arguments.
+					static const QRegularExpression identifier(QStringLiteral("\\A[A-Za-z_][A-Za-z0-9_]{0,63}\\z"));
+					const QString fname = QString::fromLatin1(name);
+					if (!identifier.match(fname).hasMatch()) {
+						VIP_LOG_ERROR("Refused a function name that is not an identifier");
+						writeError("invalid function name", timeout);
+						continue;
+					}
+
+					d_loc.sendObject("__fname", fname);
 					d_loc.sendObject("__targs", targs);
 					d_loc.sendObject("__dargs", dargs);
 
@@ -486,9 +522,7 @@ protected:
 						       "import struct\n"
 						       "__targs = pickle.loads(__targs)\n"
 						       "__dargs = pickle.loads(__dargs)\n"
-						       //"__res = " + name + "(*__targs, **__dargs)\n";
-						       "__res = builtins.internal.call_internal_func('" +
-						       name + "', *__targs, **__dargs)";
+						       "__res = builtins.internal.call_internal_func(__fname, *__targs, **__dargs)";
 					VipPyError err = d_loc.execCode(code).value().value<VipPyError>();
 					if (!err.isNull()) {
 						vip_debug("%s\n", err.traceback.toLatin1().data());
