@@ -77,6 +77,10 @@ struct VipThermalEventDBOptions
 };
 
 VIP_ANNOTATION_EXPORT QSqlDatabase vipGetGlobalSQLConnection();
+/// The connection is global to the process and belongs to the thread that opens
+/// it: a QSqlDatabase and the queries made on it must be used from that thread
+/// only. Opening blocks the caller, so it does not belong to the thread that
+/// paints.
 VIP_ANNOTATION_EXPORT bool vipCreateSQLConnection(const QString& hostname, int port, const QString& db_name, const QString& user_name, const QString& password);
 
 VIP_ANNOTATION_EXPORT void vipSetThermalEventDBOptions(const VipThermalEventDBOptions&);
@@ -110,6 +114,9 @@ VIP_ANNOTATION_EXPORT VipRequestCondition vipRequestCondition(const QString& var
 VIP_ANNOTATION_EXPORT VipRequestCondition vipRequestCondition(const QString& varname, const QString& equal);
 
 /// @brief Format a VipRequestCondition to string
+/// The result is a fragment of SQL text, so the values it carries cannot be
+/// bound by the driver: they are quoted and escaped here instead. Prefer the
+/// query functions above, which bind their parameters.
 VIP_ANNOTATION_EXPORT QString vipFormatRequestCondition(const VipRequestCondition& c);
 
 /// @brief Represents a dataset as read from the DB
@@ -169,7 +176,16 @@ VIP_ANNOTATION_EXPORT bool vipDBHasTransactions();
 
 VIP_ANNOTATION_EXPORT bool vipRemoveFromDB(const QList<qint64>& ids, VipProgress* p = nullptr);
 
-/// @brief Set new value to given column for selected events only
+/// @brief Set new value to given column for selected events only.
+///
+/// @a value is bound by the driver and may hold anything. @a column names a SQL
+/// identifier, which cannot be bound: it is checked against the columns this
+/// function accepts, which are line_of_sight, device, category,
+/// is_automatic_detection, method, confidence, user, comments, dataset, name and
+/// analysis_status. Any other name is refused and logged.
+///
+/// Returns false when the column is refused, when no connection could be opened,
+/// or when a statement failed; the reason is in the log.
 VIP_ANNOTATION_EXPORT bool vipChangeColumnInfoDB(const QList<qint64>& ids, const QString& column, const QString& value, VipProgress* p = nullptr);
 
 /// @brief Send events to DB
