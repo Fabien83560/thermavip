@@ -1725,7 +1725,11 @@ QMap<QString, QMap<Vip_experiment_id, QMap<QString, QMap<QString, VipPointVector
 							if (opts.maxY)
 								maxY = lst[i].attribute("max_T_image_position_y").toInt();
 						}
-						if (_min > min) {
+						// Lower, not higher: copied from the block just above without the
+						// operator being turned round, this kept the largest of the minima
+						// and published it as the minimum, with the position of the wrong
+						// shape beside it.
+						if (_min < min) {
 							min = _min;
 							if (opts.minX)
 								minX = lst[i].attribute("min_T_image_position_x").toInt();

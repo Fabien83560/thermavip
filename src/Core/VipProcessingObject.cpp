@@ -3295,7 +3295,16 @@ QTransform VipProcessingObject::imageTransform() const
 
 	QTransform tr;
 	if (from_center) {
-		QTransform inv = img.inverted();
+		// A matrix that cannot be inverted gives the identity back and raises a
+		// flag nobody read: the composition below then reported a transform that
+		// does not describe what the processing did, and the regions of interest
+		// were placed with it.
+		bool invertible = false;
+		QTransform inv = img.inverted(&invertible);
+		if (!invertible) {
+			VIP_LOG_WARNING("Image transform of " + objectName() + " cannot be inverted: no transform is reported");
+			return QTransform();
+		}
 		QPointF translate_back;
 		translate_back = inv.map(QPointF(after.shape(1) / 2., after.shape(0) / 2.));
 
