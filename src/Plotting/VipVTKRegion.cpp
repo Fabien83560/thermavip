@@ -1,5 +1,7 @@
 #include "VipVTKRegion.h"
 #include "VipHash.h"
+
+#include <QMutex>
 #include "vtkCamera.h"
 #include "vtkCellArray.h"
 #include "vtkDataSet.h"
@@ -624,6 +626,10 @@ QVector<QPair<QString, QVariant>> vipBuildRegionAttributes(const VipVTKRegion& r
 class VipVTKRegionProcessing::PrivateData
 {
 public:
+	// The one caller of this processing puts it in Asynchronous mode and then calls
+	// setRegion() on the next line: apply() runs on the task pool while setRegion()
+	// and region() run in the graphics thread, and all three touch these members.
+	QMutex mutex;
 	VipVTKRegion region;
 	VipVTKObject output;
 	size_t hashs = 0; // hash value for all objects points and cells
@@ -680,6 +686,8 @@ VipVTKRegionProcessing::~VipVTKRegionProcessing()
 
 void VipVTKRegionProcessing::setRegion(const VipVTKRegion& region)
 {
+	QMutexLocker lock(&d_data->mutex);
+
 	// Disconnect previous inputs
 	for (int i = 0; i < inputCount(); ++i)
 		inputAt(i)->clearConnection();
@@ -765,11 +773,14 @@ void VipVTKRegionProcessing::recompute()
 
 VipVTKRegion VipVTKRegionProcessing::region()
 {
+	QMutexLocker lock(&d_data->mutex);
 	return d_data->region;
 }
 
 void VipVTKRegionProcessing::apply()
 {
+	QMutexLocker lock(&d_data->mutex);
+
 	VipVTKObjectList objects;
 
 	// Consume inputs

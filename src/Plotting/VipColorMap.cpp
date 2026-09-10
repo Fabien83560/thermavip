@@ -455,10 +455,8 @@ VipLinearColorMap::VipLinearColorMap(const QColor& color1, const QColor& color2,
 //! Destructor
 VipLinearColorMap::~VipLinearColorMap()
 {
-	{
-		QWriteLocker lock(&d_data->histLock);
-		dirtyColorMap();
-	}
+	// The lock lives inside dirtyColorMap() now, so every caller gets it.
+	dirtyColorMap();
 }
 
 const VipLinearColorMap::ColorStops& VipLinearColorMap::internalColorStops() const
@@ -588,6 +586,11 @@ QColor VipLinearColorMap::color2() const
 
 void VipLinearColorMap::dirtyColorMap()
 {
+	// The lock the destructor used to take around this call, taken here instead: the
+	// buffer freed below is read by the painting path between startDraw() and
+	// endDraw(), and the eight setters that reach this function took nothing at all.
+	QWriteLocker lock(&d_data->histLock);
+
 	if (d_data->renderColors)
 		delete[] d_data->renderColors;
 	d_data->renderColors = nullptr;
