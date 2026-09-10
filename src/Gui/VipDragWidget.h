@@ -714,7 +714,6 @@ public Q_SLOTS:
 	// move the grip to the top left corner on resize
 	virtual void resizeEvent(QResizeEvent*);
 	virtual void moveEvent(QMoveEvent* event);
-	virtual void closeEvent(QCloseEvent* evt);
 
 	// take into account a parent change when maximized
 	virtual bool event(QEvent* event);
