@@ -172,6 +172,18 @@ public:
 	// ExtractOption extract;
 
 	QPointer<VipPlotShape> selectedShape;
+
+	// Answered once. The accessor behind it caches nothing when the database is
+	// closed or in error, so it re-ran a connection and a SELECT every time it was
+	// called, and it was called from the condition of an event filter, that is on
+	// every key press: an unreachable database froze the interface at typing speed.
+	int writeRights = -1;
+	bool hasWriteRights()
+	{
+		if (writeRights < 0)
+			writeRights = vipHasWriteRightsDB() ? 1 : 0;
+		return writeRights == 1;
+	}
 };
 
 VisualizeDB::VisualizeDB(QWidget* parent)
@@ -242,9 +254,9 @@ VisualizeDB::~VisualizeDB()
 bool VisualizeDB::eventFilter(QObject* watched, QEvent* evt)
 {
 	if (watched == d_data->table || watched == d_data->table->viewport()) {
-		if (evt->type() == QEvent::KeyPress && (vipHasWriteRightsDB())) {
+		if (evt->type() == QEvent::KeyPress) {
 			int key = static_cast<QKeyEvent*>(evt)->key();
-			if (key == Qt::Key_Delete) {
+			if (key == Qt::Key_Delete && d_data->hasWriteRights()) {
 				this->suppressSelectedLines();
 				return true;
 			}
@@ -637,7 +649,13 @@ void VisualizeDB::displayEventResult(const VipEventQueryResults& res, VipProgres
 
 	d_data->events = res;
 
-	// fill table
+	// fill table. Sorting is armed in the constructor and never disarmed: writing
+	// the column that carries the sort indicator moves the row at once, so the
+	// twelve setItem() that follow wrote into a row that was no longer the event's,
+	// and the identifiers of one displayed row came from several records.
+	const bool was_sorting = d_data->table->isSortingEnabled();
+	d_data->table->setSortingEnabled(false);
+
 	d_data->table->setRowCount(0);
 	d_data->table->setRowCount(res.events.size());
 	int row = 0;
@@ -676,6 +694,8 @@ void VisualizeDB::displayEventResult(const VipEventQueryResults& res, VipProgres
 		QTableWidgetItem* name = new DBItem(evt.eventId, "name", evt.name, DBItem::String);
 		d_data->table->setItem(row, col++, name);
 	}
+
+	d_data->table->setSortingEnabled(was_sorting);
 
 	d_data->table->resizeColumnsToContents();
 	d_data->table->resizeRowsToContents();
@@ -755,9 +775,20 @@ void VisualizeDB::displaySelectedEvents(QAction* a)
 	VipEventQuery q;
 	q.eventIds = ids;
 	VipEventQueryResults r = vipQueryDB(q, &progress);
+	// Both results carry an error channel, and launchQuery() already reads it: an
+	// unreachable database used to reach the message about invalid identifiers
+	// further down, which names the wrong cause and drops the SQL error.
+	if (!r.isValid()) {
+		VIP_LOG_ERROR("Unable to retrieve the events: " + r.error);
+		return;
+	}
 
 	// query all shapes
 	VipFullQueryResult fr = vipFullQueryDB(r, &progress);
+	if (!fr.isValid()) {
+		VIP_LOG_ERROR("Unable to retrieve the event shapes: " + fr.error);
+		return;
+	}
 
 	// extract events
 	Vip_event_list events = vipExtractEvents(fr);
@@ -775,7 +806,10 @@ void VisualizeDB::displaySelectedEvents(QAction* a)
 		}
 	}
 
-	VipVideoPlayer* pl = a->property("player").value<VipVideoPlayer*>();
+	// QPointer, as one member of this same class already is: the pumping below runs
+	// the event loop for up to a second, during which the user can close the player
+	// or the whole workspace.
+	QPointer<VipVideoPlayer> pl = a->property("player").value<VipVideoPlayer*>();
 	if (!pl) {
 		// create a new player
 		QPair<Vip_experiment_id, QString> pulse;
@@ -802,6 +836,8 @@ void VisualizeDB::displaySelectedEvents(QAction* a)
 	}
 	if (pl) {
 		vipProcessEvents(nullptr, 1000);
+		if (!pl)
+			return;
 		if (VipPlayerDBAccess* db = /*VipPlayerDBAccess::fromPlayer(pl)*/ pl->findChild<VipPlayerDBAccess*>()) {
 			db->addEvents(events, true);
 		}
