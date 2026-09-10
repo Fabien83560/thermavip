@@ -279,7 +279,10 @@ void VipExtractShapesInfos::apply()
 				map.append(name + "/Bounding rect",
 					   "x:" + QString::number(r.left()) + ", y:" + QString::number(r.top()) + ", w:" + QString::number(r.width()) + ", h:" + QString::number(r.height()));
 #if QT_VERSION_MAJOR >= 5 && QT_VERSION_MINOR >= 8
-				map[name + "/Area"] = QString::number(area(sh.region())) + " pixels�";
+				// append(), like the five lines around it: the subscript by key returns
+				// a copy, so this assigned to a temporary and the area of a region of
+				// interest never reached the panel.
+				map.append(name + "/Area", QString::number(area(sh.region())) + " pixels�");
 #endif
 				auto stats = sh.statistics(ar, QPoint(0, 0), Vip::Max | Vip::Min | Vip::Mean | Vip::Std);
 				if (ar.canConvert<double>()) {
@@ -932,6 +935,16 @@ bool VipProcessingObjectInfo::setPlayer(VipAbstractPlayer* player)
 void VipProcessingObjectInfo::setProcessingObject(VipProcessingObject* obj, VipOutput* output)
 {
 	if (obj) {
+		// The parameter is optional and the documentation says what is meant to
+		// happen without it, but every use below dereferenced it: take the first
+		// output of the processing, which is what the title code already assumes.
+		if (!output && obj->outputCount() > 0)
+			output = obj->outputAt(0);
+		if (!output) {
+			obj = nullptr;
+		}
+	}
+	if (obj) {
 		// for VipDisplayObject, use the source VipProcessingObject
 		if (VipDisplayObject* display = qobject_cast<VipDisplayObject*>(obj)) {
 			if (VipOutput* src = display->inputAt(0)->connection()->source()) {
@@ -1120,6 +1133,10 @@ QList<VipProcessingObject*> VipProcessingObjectInfo::plotSelectedAttributes()
 	VipProcessingPool* pool = nullptr;
 
 	for (int i = 0; i < items.size(); ++i) {
+		// Only the leaves are of this type. The categories are plain tree items, and
+		// reading the member of a type they do not have is a read past the object.
+		if (!items[i]->parent())
+			continue;
 		if (VipOutput* out = static_cast<InfoTreeWidgetItem*>(items[i])->output) {
 			if (!pool) {
 				pool = out->parentProcessing()->parentObjectPool();
@@ -1561,7 +1578,10 @@ QList<VipProcessingObject*> VipProcessingObjectInfo::plotAttributes(QList<VipOut
 			VipNumericValueToPointVector* ConvertToPointVector = new VipNumericValueToPointVector(pool);
 			ConvertToPointVector->setScheduleStrategies(VipProcessingObject::Asynchronous);
 			ConvertToPointVector->setDeleteOnOutputConnectionsClosed(true);
-			ConvertToPointVector->inputAt(0)->setConnection(extract[i]->outputAt(i));
+			// Output zero, which is the only one these have; the loop index was used
+			// as an output index, so the second attribute onwards asked for an output
+			// that is not there. The line below already writes it the right way.
+			ConvertToPointVector->inputAt(0)->setConnection(extract[i]->outputAt(0));
 
 			VipProcessingList* ProcessingList = new VipProcessingList(pool);
 			ProcessingList->setScheduleStrategies(VipProcessingObject::Asynchronous);
