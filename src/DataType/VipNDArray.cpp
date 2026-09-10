@@ -155,7 +155,11 @@ bool VipNDArray::load(const char* filename, FileFormat format)
 			if (!fin.open(QFile::ReadOnly))
 				return false;
 			QDataStream str(&fin);
-			qsizetype htype, dtype;
+			// Two ints, which is what the reader of this format writes and reads.
+			// Declared as qsizetype the probe consumed sixteen bytes for an eight
+			// byte header, so the two values it tested were never the ones stored
+			// and every binary file was taken for text.
+			int htype = 0, dtype = 0;
 			str >> htype;
 			str >> dtype;
 			VipSharedHandle h = vipCreateArrayHandle(htype, dtype);
