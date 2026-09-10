@@ -324,14 +324,19 @@ bool VipUpdate::renameNewFiles(const QString& dir_name)
 		QString new_name = files[i];
 		new_name.remove(".vipnewfile");
 
-		if (QFileInfo(new_name).exists()) {
+		// The rename used to sit inside the test for an existing target, so a file
+		// the update brings and that was not there before stayed on the disk under
+		// its temporary name and was never put in place: the installation ended up
+		// half updated, and the function still reported success.
+		if (QFileInfo::exists(new_name) && !QFile::remove(new_name)) {
+			VIP_LOG_ERROR("Cannot replace file " + new_name);
+			has_opened_files = true;
+			continue;
+		}
 
-			int cr = remove(new_name.toLatin1().data());
-			if (cr != 0) {
-				// VIP_LOG_WARNING("Cannot remove file " + QFileInfo(new_name).fileName());
-			}
-			else if (!QFile::rename(files[i], new_name))
-				return false;
+		if (!QFile::rename(files[i], new_name)) {
+			VIP_LOG_ERROR("Cannot rename " + files[i]);
+			return false;
 		}
 	}
 

@@ -66,9 +66,13 @@ bool RAWSignalReader::open(VipIODevice::OpenModes mode)
 
 	// create deviec from path
 	QIODevice* d = createDevice(p, QIODevice::ReadOnly);
+	// Tested, as the writer below already does: this gives nothing when the file
+	// is missing, locked or unreadable, and a dropped file is enough to reach it.
+	if (!d)
+		return false;
 
 	// read file content
-	qint64 samples = d->size() / sizeof(VipPoint);
+	const qint64 samples = d->size() / (qint64)sizeof(VipPoint);
 	VipPointVector vec(samples);
 	// Point by point, through the public interface: the vector is a circular
 	// buffer whose data() is private and returns the control structure it shares
@@ -204,12 +208,18 @@ SimpleGuiInterface::LoadResult SimpleGuiInterface::load()
 		sdevice->setAttribute("YUnit", "Y");
 		sdevice->setAttribute("Name", "sinus");
 
-		// Create player from data
-		VipAbstractPlayer* pl = vipCreatePlayersFromProcessing(cdevice,nullptr).first();
+		// Create player from data. The list can come back empty, and first() on an
+		// empty list is undefined; and the player created is not necessarily the
+		// kind this loop collects.
+		const QList<VipAbstractPlayer*> created = vipCreatePlayersFromProcessing(cdevice, nullptr);
+		if (created.isEmpty())
+			continue;
+		VipAbstractPlayer* pl = created.first();
 		// Add data to existing player
 		vipCreatePlayersFromProcessing(sdevice, pl);
 
-		players.push_back(qobject_cast<VipPlotPlayer*>(pl));
+		if (VipPlotPlayer* plot = qobject_cast<VipPlotPlayer*>(pl))
+			players.push_back(plot);
 	}
 
 
