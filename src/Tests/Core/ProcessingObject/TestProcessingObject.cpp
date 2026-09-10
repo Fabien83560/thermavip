@@ -1337,6 +1337,44 @@ private Q_SLOTS:
 
 		QVERIFY2(reads.load() > 0, "the reader must have run");
 	}
+
+	/// A connection walks its peers by index every time a datum goes out, while
+	/// connecting and disconnecting empties and reallocates that same vector.
+	/// Nothing stood between the two. Meant to be run under a sanitiser, where
+	/// the old code reads past the end or into freed memory.
+	void sendingWhileTheGraphIsRewiredIsSafe()
+	{
+		MultiplyByProperty source;
+		MultiplyByProperty first;
+		MultiplyByProperty second;
+		source.setComputeTimeStatistics(false);
+
+		QVERIFY(source.outputAt(0)->setConnection(first.inputAt(0)));
+
+		std::atomic<bool> stop{ false };
+		std::atomic<int> sends{ 0 };
+		QThread* sender = QThread::create([&]() {
+			while (!stop.load()) {
+				source.outputAt(0)->setData(makeData(1.0));
+				++sends;
+			}
+		});
+		sender->start();
+
+		QElapsedTimer started;
+		started.start();
+		while (sends.load() == 0 && started.elapsed() < 30000)
+			QThread::msleep(1);
+
+		for (int i = 0; i < 2000; ++i)
+			source.outputAt(0)->setConnection((i % 2) ? first.inputAt(0) : second.inputAt(0));
+
+		stop.store(true);
+		QVERIFY(sender->wait(30000));
+		delete sender;
+
+		QVERIFY2(sends.load() > 0, "the sender must have run");
+	}
 };
 
 VIP_TEST_MAIN(TestProcessingObject)

@@ -675,6 +675,11 @@ Q_SIGNALS:
 	void dataSent(VipProcessingIO* io, const VipAnyData& data);
 
 private:
+	/// @brief One copy of the peer vector, taken under the lock that guards it.
+	/// The vector is walked on the data path while the editing of the graph
+	/// empties or reallocates it.
+	VipConnectionVector connectionsCopy() const;
+
 	VIP_DECLARE_PRIVATE_DATA();
 };
 

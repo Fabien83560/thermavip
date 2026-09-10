@@ -198,6 +198,11 @@ public:
 	QString io_name;
 	QString address;
 	IOType openMode;
+	// Guards the vector below, which the data path walks by index while the
+	// editing of the graph empties or reallocates it. Every function takes the
+	// lock of one connection at a time and never holds it while calling into
+	// another object, so there is no order to invert.
+	mutable VipSpinlock lock;
 	VipConnectionVector connections;
 };
 
@@ -213,7 +218,10 @@ VipConnection::~VipConnection()
 	// derived class closes what it owns in its own destructor.
 	VipConnection::doClearConnection();
 	d_data->address.clear();
-	d_data->connections.clear();
+	{
+		VipUniqueLock<VipSpinlock> locker(d_data->lock);
+		d_data->connections.clear();
+	}
 	d_data->openMode = UnknownConnection;
 }
 
@@ -234,12 +242,24 @@ VipProcessingObject* VipConnection::parentProcessingObject() const
 	return const_cast<VipProcessingObject*>(d_data->parent);
 }
 
+VipConnectionVector VipConnection::connectionsCopy() const
+{
+	VipUniqueLock<VipSpinlock> locker(d_data->lock);
+	return d_data->connections;
+}
+
 VipOutput* VipConnection::source() const
 {
-	if (d_data->connections.size())
-		return d_data->connections.first()->parentProcessingIO()->toOutput();
-	else
-		return nullptr;
+	VipConnectionPtr first;
+	{
+		VipUniqueLock<VipSpinlock> locker(d_data->lock);
+		if (d_data->connections.size())
+			first = d_data->connections.first();
+	}
+	if (first)
+		if (VipProcessingIO* io = first->parentProcessingIO())
+			return io->toOutput();
+	return nullptr;
 }
 
 
@@ -258,17 +278,24 @@ void VipConnection::setupConnection(const QString& addr, const VipConnectionPtr&
 	resetError();
 	d_data->address = addr;
 
-	// remove previous connections
-	//VipConnectionPtr this_con = sharedFromThis();
-	for (int i = 0; i < d_data->connections.size(); ++i) {
-		qsizetype index = indexOfSharedVector( d_data->connections[i]->d_data->connections, this);
-		if (index >= 0)
-			d_data->connections[i]->d_data->connections.remove(index);
+	// The former peers are taken aside first, then detached one at a time under
+	// their own lock: this walked and mutated two vectors with none.
+	VipConnectionVector previous;
+	{
+		VipUniqueLock<VipSpinlock> locker(d_data->lock);
+		previous = d_data->connections;
+		if (con)
+			d_data->connections = VipConnectionVector() << con;
+		else
+			d_data->connections.clear();
 	}
 
-	d_data->connections.clear();
-	if (con)
-		d_data->connections = VipConnectionVector() << con;
+	for (int i = 0; i < previous.size(); ++i) {
+		VipUniqueLock<VipSpinlock> locker(previous[i]->d_data->lock);
+		qsizetype index = indexOfSharedVector(previous[i]->d_data->connections, this);
+		if (index >= 0)
+			previous[i]->d_data->connections.remove(index);
+	}
 }
 
 bool VipConnection::openConnection(IOType type)
@@ -310,7 +337,10 @@ void VipConnection::clearConnection()
 	resetError();
 	doClearConnection();
 	d_data->address.clear();
-	d_data->connections.clear();
+	{
+		VipUniqueLock<VipSpinlock> locker(d_data->lock);
+		d_data->connections.clear();
+	}
 	setOpenMode(UnknownConnection);
 }
 
@@ -358,9 +388,15 @@ QString VipConnection::address() const
 	// recompute the address if needed ( the VipProcessingObject name might have changed in the meantime)
 	if (d_data->openMode == InputConnection) {
 		// build connection from given VipConnection instances
-		if (d_data->connections.size()) {
+		VipConnectionPtr back;
+		{
+			VipUniqueLock<VipSpinlock> locker(d_data->lock);
+			if (d_data->connections.size())
+				back = d_data->connections.back();
+		}
+		if (back) {
 			// use the last (probably unique) connection which is the output
-			const QString addr = outputConnectionAddress(d_data->connections.back());
+			const QString addr = outputConnectionAddress(back);
 			if (!addr.isEmpty())
 				const_cast<QString&>(d_data->address) = addr;
 		}
@@ -371,8 +407,9 @@ QString VipConnection::address() const
 QList<VipInput*> VipConnection::sinks() const
 {
 	QList<VipInput*> res;
-	for (int i = 0; i < d_data->connections.size(); ++i)
-		if (VipProcessingIO* io = d_data->connections[i]->parentProcessingIO())
+	const VipConnectionVector connections = connectionsCopy();
+	for (int i = 0; i < connections.size(); ++i)
+		if (VipProcessingIO* io = connections[i]->parentProcessingIO())
 			if (VipInput* in = io->toInput())
 				res << in;
 	return res;
@@ -381,8 +418,9 @@ QList<VipInput*> VipConnection::sinks() const
 QList<UniqueProcessingIO*> VipConnection::allSinks() const
 {
 	QList<UniqueProcessingIO*> res;
-	for (int i = 0; i < d_data->connections.size(); ++i)
-		if (VipProcessingIO* io = d_data->connections[i]->parentProcessingIO()) {
+	const VipConnectionVector connections = connectionsCopy();
+	for (int i = 0; i < connections.size(); ++i)
+		if (VipProcessingIO* io = connections[i]->parentProcessingIO()) {
 			if (VipInput* in = io->toInput())
 				res << in;
 			else if (VipProperty* p = io->toProperty())
@@ -415,20 +453,31 @@ void VipConnection::doOpenConnection(IOType type)
 {
 	if (type == InputConnection) {
 		// build connection from given VipConnection instances
-		if (d_data->connections.size()) {
-			// use the last (probably unique) connection which is the output
-			VipConnectionPtr out = d_data->connections.back();
+		VipConnectionPtr out;
+		{
+			VipUniqueLock<VipSpinlock> locker(d_data->lock);
+			if (d_data->connections.size())
+				// use the last (probably unique) connection which is the output
+				out = d_data->connections.back();
+		}
+		if (out) {
 			VipConnectionPtr in = sharedFromThis();
 
-			// add this connection to output connection vector
-			if (out->d_data->connections.indexOf(in) < 0)
-				out->d_data->connections.append(in);
+			// add this connection to output connection vector, under its own lock
+			{
+				VipUniqueLock<VipSpinlock> locker(out->d_data->lock);
+				if (out->d_data->connections.indexOf(in) < 0)
+					out->d_data->connections.append(in);
+			}
 
 			// save processing pool name if possible
 			const QString addr = outputConnectionAddress(out);
 			if (!addr.isEmpty())
 				d_data->address = addr;
-			d_data->connections = VipConnectionVector() << out;
+			{
+				VipUniqueLock<VipSpinlock> locker(d_data->lock);
+				d_data->connections = VipConnectionVector() << out;
+			}
 			this->setOpenMode(InputConnection);
 		}
 		// for Inputs only, build from an address: 'VipConnection:processing_name;processing_io_name'
@@ -458,13 +507,19 @@ void VipConnection::doOpenConnection(IOType type)
 						VipConnectionPtr in = sharedFromThis();
 						VipConnectionPtr out = _output->connection();
 
-						if (out->d_data->connections.indexOf(in) < 0)
-							out->d_data->connections.append(in);
+						{
+							VipUniqueLock<VipSpinlock> locker(out->d_data->lock);
+							if (out->d_data->connections.indexOf(in) < 0)
+								out->d_data->connections.append(in);
+						}
 
 						const QString out_addr = outputConnectionAddress(out);
 						if (!out_addr.isEmpty())
 							d_data->address = out_addr;
-						d_data->connections = VipConnectionVector() << out;
+						{
+							VipUniqueLock<VipSpinlock> locker(d_data->lock);
+							d_data->connections = VipConnectionVector() << out;
+						}
 						this->setOpenMode(InputConnection);
 						return;
 					}
@@ -487,39 +542,61 @@ void VipConnection::doOpenConnection(IOType type)
 
 void VipConnection::doSendData(const VipAnyData& data)
 {
-	for (int i = 0; i < d_data->connections.size(); ++i) {
-		d_data->connections[i]->receiveData(data);
+	// One copy taken under the lock, then the sends. Walking the member by index
+	// let the editing of the graph empty it between the bound check and the read.
+	const VipConnectionVector connections = connectionsCopy();
+	for (int i = 0; i < connections.size(); ++i) {
+		connections[i]->receiveData(data);
 	}
 }
 
 void VipConnection::doClearConnection()
 {
 	//VipConnectionPtr con = sharedFromThis();
-	for (int i = 0; i < d_data->connections.size(); ++i) {
+	VipConnectionVector connections;
+	{
+		VipUniqueLock<VipSpinlock> locker(d_data->lock);
+		connections = d_data->connections;
+		d_data->connections.clear();
+	}
+
+	for (int i = 0; i < connections.size(); ++i) {
 		// Hold the peer: the callback below can drop the last reference to it.
-		VipConnectionPtr peer = d_data->connections[i];
-		qsizetype index = indexOfSharedVector(peer->d_data->connections, this);
-		if (index >= 0) {
+		VipConnectionPtr peer = connections[i];
 
+		bool removed = false;
+		bool empty = false;
+		{
+			VipUniqueLock<VipSpinlock> locker(peer->d_data->lock);
+			qsizetype index = indexOfSharedVector(peer->d_data->connections, this);
+			if (index >= 0) {
+				peer->d_data->connections.remove(index);
+				removed = true;
+				empty = peer->d_data->connections.isEmpty();
+			}
+		}
+
+		if (removed) {
 			auto* p = peer->d_data->parent;
-
-			peer->d_data->connections.remove(index);
 			// The parent is only set by setParentProcessingObject: a connection
-			// that was never attached has none.
-			if (p && peer->d_data->connections.isEmpty())
+			// that was never attached has none. Called outside the lock, since it
+			// walks back into the processing that owns the peer.
+			if (p && empty)
 				p->receiveConnectionClosed(peer->d_data->io);
 
 			peer->checkClosedConnections();
 		}
 	}
 
-	d_data->connections.clear();
 	setOpenMode(UnknownConnection);
 }
 
 void VipConnection::checkClosedConnections()
 {
-	if (d_data->connections.size() == 0)
+	VipUniqueLock<VipSpinlock> locker(d_data->lock);
+	const bool empty = d_data->connections.size() == 0;
+	locker.unlock();
+	if (empty)
 		setOpenMode(UnknownConnection);
 	else
 		Q_EMIT connectionClosed(parentProcessingIO());
