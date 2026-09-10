@@ -1967,6 +1967,10 @@ bool VipLastAvailableList::readAll(VipAnyDataList& lst)
 		if (m_has_new_data) {
 			lst.resize(1);
 			lst[0] = d_data;
+			// The base documents this as reading and removing; next(), just above,
+			// clears the flag and this did not, so hasNewData() stayed true and every
+			// caller read the same datum for ever.
+			m_has_new_data = (false);
 			return true;
 		}
 	}

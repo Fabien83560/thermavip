@@ -301,6 +301,31 @@ private Q_SLOTS:
 		QCOMPARE(list.next().value<double>(), 5.0);
 	}
 
+	/// readAll is documented as reading and removing. LastAvailable read the datum
+	/// and left the flag set, so a caller of readAll or allNext saw the same datum
+	/// as new for ever.
+	void readAllConsumesTheDatum()
+	{
+		VipLastAvailableList list;
+		list.push(makeData(5.0));
+		QVERIFY(list.hasNewData());
+
+		VipAnyDataList read;
+		QVERIFY(list.readAll(read));
+		QCOMPARE(read.size(), 1);
+		QCOMPARE(read[0].value<double>(), 5.0);
+
+		QVERIFY2(!list.hasNewData(), "the datum was read, so it is no longer new");
+		QCOMPARE(list.status(), 0);
+
+		VipAnyDataList again;
+		QVERIFY2(!list.readAll(again), "a second read has nothing to give");
+
+		// The value itself stays available, which is what tells this list apart from
+		// a FIFO of size one.
+		QCOMPARE(list.probe().value<double>(), 5.0);
+	}
+
 	/// A fresh list is empty and status() is -1 until something is pushed.
 	void dataListEmptyBeforeFirstPushDirect()
 	{
