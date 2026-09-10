@@ -198,6 +198,24 @@ private Q_SLOTS:
 		QCOMPARE(different, (qsizetype)0);
 	}
 
+	/// Turning a double into text went through the number of digits a float
+	/// guarantees, six, so nine significant digits were dropped on the path every
+	/// value of the library takes to become text, and reading the text back did
+	/// not give the value.
+	void aDoubleTurnedIntoTextKeepsItsDigits()
+	{
+		VipNDArrayType<double> source(vipVector(1));
+		source[0] = 3.14159265358979;
+
+		VipNDArrayType<QString> text(vipVector(1));
+		QVERIFY(VipNDArray(source).convert(text));
+
+		bool ok = false;
+		const double back = text[0].toDouble(&ok);
+		QVERIFY2(ok, qPrintable(text[0]));
+		QVERIFY2(back == source[0], qPrintable(text[0]));
+	}
+
 	/// The axis of a stack comes from the caller and is used as an index into a
 	/// shape held on the stack, twice to write. The only bound was a debug
 	/// assertion, which is nothing in a release build.

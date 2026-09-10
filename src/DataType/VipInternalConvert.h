@@ -173,7 +173,10 @@ namespace detail
 			return QString::number(d);
 		}
 		static QString apply(long double d) { return vipLongDoubleToString(d); }
-		static QString apply(double d) { return QString::number(d, 'g', FLT_DIG); }
+		// DBL_DIG, not FLT_DIG: the second is what a float guarantees, six digits,
+		// and it truncated every double turned into text by nine significant
+		// digits, on the path every value of the library takes to become text.
+		static QString apply(double d) { return QString::number(d, 'g', DBL_DIG); }
 		static QString apply(float d) { return QString::number(d, 'g', FLT_DIG); }
 		static QString apply(bool d) { return QLatin1String(d ? "true" : "false"); }
 		static QString apply(const QByteArray& ar) { return QString(ar); }
@@ -205,7 +208,8 @@ namespace detail
 		static QByteArray apply(const long int& d) { return QByteArray::number((qint64)d); }
 		static QByteArray apply(const long unsigned int& d) { return QByteArray::number((quint64)d); }
 		static QByteArray apply(long double d) { return vipLongDoubleToByteArray(d); }
-		static QByteArray apply(double d) { return QByteArray::number(d, 'g', FLT_DIG); }
+		// DBL_DIG, not FLT_DIG, as above.
+		static QByteArray apply(double d) { return QByteArray::number(d, 'g', DBL_DIG); }
 		static QByteArray apply(float d) { return QByteArray::number(d, 'g', FLT_DIG); }
 		static QByteArray apply(bool d) { return QByteArray(d ? "true" : "false"); }
 		static QByteArray apply(const QString& str) { return str.toLatin1(); }
