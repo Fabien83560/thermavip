@@ -902,6 +902,27 @@ private Q_SLOTS:
 		QCOMPARE(second.property("campaign").toInt(), 7);
 	}
 
+	/// update() walks its sources while holding its own lock, and that lock does
+	/// not nest. Two processings that are sources of each other brought the walk
+	/// back to the first one on the same thread, onto the lock it was already
+	/// holding, and nothing came back from there.
+	void aCycleInTheSourcesDoesNotBlockUpdate()
+	{
+		MultiplyByProperty first;
+		MultiplyByProperty second;
+		first.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::NoThread);
+		second.setScheduleStrategies(VipProcessingObject::OneInput | VipProcessingObject::NoThread);
+
+		QVERIFY(first.outputAt(0)->setConnection(second.inputAt(0)));
+		QVERIFY(second.outputAt(0)->setConnection(first.inputAt(0)));
+
+		first.inputAt(0)->setData(makeData(2.0));
+		QVERIFY(first.update(true));
+
+		QCOMPARE(first.applyCount.load(), 1);
+		QCOMPARE(first.outputAt(0)->data().value<double>(), 4.0);
+	}
+
 	/// The reader dropped the connections and wrote the object as it went, so an
 	/// archive that stops after the first field left a disconnected object
 	/// carrying default values. It now applies nothing at all.

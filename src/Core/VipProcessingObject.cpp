@@ -2481,8 +2481,10 @@ namespace
 {
 	// Set of nodes already reached by the current descent, held for the outermost
 	// call only. Without it, two processings that are sources of each other
-	// recursed until the stack ran out.
-	struct VisitedSources
+	// recursed until the stack ran out. One set per kind of descent, so that a
+	// descent started inside another does not read the marks of the first.
+	template<int Kind>
+	struct VisitedSet
 	{
 		static QSet<const VipProcessingObject*>*& current()
 		{
@@ -2491,18 +2493,21 @@ namespace
 		}
 		QSet<const VipProcessingObject*> own;
 		const bool outermost;
-		VisitedSources()
+		VisitedSet()
 		  : outermost(current() == nullptr)
 		{
 			if (outermost)
 				current() = &own;
 		}
-		~VisitedSources()
+		~VisitedSet()
 		{
 			if (outermost)
 				current() = nullptr;
 		}
 	};
+
+	using VisitedSources = VisitedSet<0>;
+	using VisitedUpdates = VisitedSet<1>;
 }
 
 void VipProcessingObject::setSourceProperty(const char* name, const QVariant& value)
@@ -3484,6 +3489,15 @@ bool VipProcessingObject::update(bool force_run)
 	// Exit if disabled
 	if (VIP_UNLIKELY(!isEnabled()))
 		return false;
+
+	// The descent into the sources below happens under the lock taken here. On a
+	// graph where two processings are sources of each other, it came back to this
+	// object on the same thread, onto a lock it already held, and the process
+	// stopped there.
+	VisitedUpdates visited;
+	if (VisitedUpdates::current()->contains(this))
+		return false;
+	VisitedUpdates::current()->insert(this);
 
 	// Make sure the inputs/outputs/properties are correctly initialized
 	initialize();
