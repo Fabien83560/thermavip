@@ -296,20 +296,21 @@ void VipPyMATDevice::apply()
 
 		QString varname = "arr" + QString::number((qint64)this);
 		QString newname = "new" + QString::number((qint64)this);
+		// A bare except caught everything and assigned the last image to the
+		// accumulator, so one failed stack part way through a recording replaced
+		// the whole sequence acquired so far with a single frame, without a word.
+		// The two cases are told apart: the first frame starts the stack, a later
+		// one is appended, and a real failure is reported instead of swallowed.
 		QString code = "import numpy as np\n"
-			       "try: \n"
-			       "  if " +
-			       varname + ".shape == " + newname + ".shape: " + varname + ".shape=(1,*" + varname +
-			       ".shape)\n"
+			       "if '" +
+			       varname + "' not in globals():\n"
 			       "  " +
-			       newname + ".shape=(1,*" + newname +
-			       ".shape)\n"
+			       varname + " = " + newname + ".reshape((1, *" + newname +
+			       ".shape))\n"
+			       "else:\n"
 			       "  " +
-			       varname + " = np.vstack((" + varname + "," + newname +
-			       "))\n"
-			       "except:\n"
-			       "  " +
-			       varname + "=" + newname + "\n";
+			       varname + " = np.vstack((" + varname + ", " + newname + ".reshape((1, *" + newname +
+			       ".shape))))\n";
 
 		// vip_debug("%s\n", code.toLatin1().data());
 
