@@ -90,7 +90,10 @@ class SharedMemory : public QThread
 	QSharedMemory d_mem;
 	MemHeader d_header;
 	bool d_main;
-	bool d_stop;
+	// Atomic: written by the thread that destroys this object and read every turn
+	// by the listening thread. A plain bool leaves that thread free never to see
+	// the write, and the wait below would then never return.
+	std::atomic<bool> d_stop;
 	VipPyLocal d_loc;
 	QMutex d_mutex;
 
@@ -168,7 +171,12 @@ public:
 
 		d_stop = true;
 		d_loc.stop();
-		wait();
+		// Bounded, with a word: this runs while the application closes, and the turn
+		// in progress can be inside a read that has no deadline of its own.
+		if (!wait(30000)) {
+			VIP_LOG_WARNING("The shared memory thread did not stop, waiting for it");
+			wait();
+		}
 	}
 
 	void acquire() { d_mutex.lock(); }
