@@ -365,7 +365,13 @@ QString VipGenericRecorder::generateFilename() const
 
 	QString path;
 
-	QFileInfo info(this->path().replace("\\", "/"));
+	// QFileInfo decomposes the path, both separators included. The normalisation
+	// used to be applied to a temporary and was therefore never kept, and the
+	// parent directory was then rebuilt by removing a substring from the raw
+	// path: on a Windows path nothing was removed, so the output directory was
+	// the file itself and the recording was lost without a word; and on a path
+	// whose directory carries the name of the file, both occurrences went.
+	const QFileInfo info(this->path());
 	QString fileName = info.fileName();
 
 	// remove the date prefix if possible
@@ -379,7 +385,7 @@ QString VipGenericRecorder::generateFilename() const
 	}
 
 	// get the canonical path
-	QString canonical_path = this->path().remove("/" + info.fileName());
+	const QString canonical_path = info.absolutePath();
 
 	QString prefix = QDateTime::currentDateTime().toString(datePrefix());
 	path = canonical_path + "/" + prefix + fileName;
