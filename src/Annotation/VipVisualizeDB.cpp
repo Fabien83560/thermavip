@@ -143,8 +143,12 @@ struct DBItem : public QTableWidgetItem
 						}*/
 
 						QString& _tooltip = const_cast<QString&>(tooltip);
-						_tooltip +=
-						  QString::number(evt.experiment_id) + " " + evt.camera + " " + evt.device + " " + evt.eventName + " (" + QString::number(evt.confidence) + "/1)";
+						// Escaped: the literal <br> below makes Qt render this tooltip as rich
+						// text, and these three fields come straight from the database, where a
+						// user with write rights can put markup that every other user then
+						// renders — an <img> resolves a resource on hover.
+						_tooltip += QString::number(evt.experiment_id) + " " + evt.camera.toHtmlEscaped() + " " + evt.device.toHtmlEscaped() + " " +
+							    evt.eventName.toHtmlEscaped() + " (" + QString::number(evt.confidence) + "/1)";
 						_tooltip += "<br>duration: " + QString::number(evt.duration / 1000000000.0) + "s";
 						//_tooltip += "<br>" + vipToHtml(img, "align=\"middle\"");
 						return tooltip;

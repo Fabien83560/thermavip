@@ -2317,9 +2317,24 @@ QVariantMap VipPyInterpreter::parameters() const
 
 void VipPyInterpreter::setWorkingDirectory(const QString& workingDirectory)
 {
+	// Normalised, and it has to name a directory that exists: this value also
+	// arrives from a session file, where nothing stopped it from being a relative
+	// walk upward or a network path.
+	const QString clean = QDir::cleanPath(workingDirectory);
+	if (clean.isEmpty())
+		return;
+	if (clean.contains('\n') || clean.contains('\r') || clean.contains('\'')) {
+		VIP_LOG_ERROR("Refused a working directory containing a quote or a line break");
+		return;
+	}
+	if (!QFileInfo(clean).isDir()) {
+		VIP_LOG_ERROR("Refused a working directory that is not one: " + clean);
+		return;
+	}
+
 	QWriteLocker ll(&d_data->lock);
-	if (QFileInfo(workingDirectory) != QFileInfo(d_data->workingDirectory) && !workingDirectory.isEmpty()) {
-		d_data->workingDirectory = workingDirectory;
+	if (QFileInfo(clean) != QFileInfo(d_data->workingDirectory)) {
+		d_data->workingDirectory = clean;
 		d_data->workingDirectory.replace("\\", "/");
 		d_data->dirty = true;
 	}
@@ -2466,7 +2481,13 @@ VipPyIOOperation* VipPyInterpreter::reset(bool create_new)
 	connect(this->d_data->pyIOOperation.get(), SIGNAL(started()), this, SLOT(emitStarted()), Qt::DirectConnection);
 	connect(this->d_data->pyIOOperation.get(), SIGNAL(finished()), this, SLOT(emitFinished()), Qt::DirectConnection);
 	this->d_data->pyIOOperation->start();
-	this->d_data->pyIOOperation->execCode("import os;os.chdir('" + d_data->workingDirectory + "')").wait();
+	// Sent as an object rather than pasted into the source: the value comes from a
+	// session file, and a single apostrophe in it closed the literal and ran the rest
+	// as Python in this process.
+	if (!d_data->workingDirectory.isEmpty()) {
+		this->d_data->pyIOOperation->sendObject("_vip_wd", QVariant(d_data->workingDirectory)).wait();
+		this->d_data->pyIOOperation->execCode("import os;os.chdir(_vip_wd)").wait();
+	}
 	this->d_data->pyIOOperation->execCode(d_data->startupCode).wait();
 
 	// register all files found in the Python directory
