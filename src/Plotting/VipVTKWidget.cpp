@@ -340,6 +340,9 @@ void VipVTKWidget::paintGL()
 			view = static_cast<VipVTKGraphicsView*>(p);
 			break;
 		}
+		// The walk never advanced: an immediate parent that is not the view froze the
+		// graphics thread here, inside paintGL().
+		p = p->parentWidget();
 	}
 	if (view)
 		lockers = vipLockVTKObjects(fromPlotVipVTKObject(view->objects()));
@@ -464,6 +467,11 @@ void VipVTKWidget::applyCameraToAllLayers()
 			break;
 		}
 	}
+
+	// No interactive renderer at all is a configuration this file produces itself,
+	// by turning interaction off on the upper layers.
+	if (!ren)
+		return;
 
 	// apply found camera to all other renderer
 	col->InitTraversal();
