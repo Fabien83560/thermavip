@@ -375,7 +375,11 @@ void VipPlotItemWidget::setPlotItem(VipPlotItem* item)
 		return;
 
 	m_item = item;
-	m_scales = vipAllScales(item);
+	// Held weakly: see the member declaration.
+	m_scales.clear();
+	const QList<VipAbstractScale*> all_scales = vipAllScales(item);
+	for (VipAbstractScale* s : all_scales)
+		m_scales.append(s);
 
 	m_visible.blockSignals(true);
 	m_antialiazed.blockSignals(true);
@@ -394,11 +398,11 @@ void VipPlotItemWidget::setPlotItem(VipPlotItem* item)
 	bool have_axis_option = false; //(item_scales.size() == 2);
 	if (have_axis_option) {
 		m_xAxis.clear();
-		m_xAxis.addItems(vipScaleNames(m_scales));
-		m_xAxis.setCurrentIndex(m_scales.indexOf(item_scales[0]));
+		m_xAxis.addItems(vipScaleNames(all_scales));
+		m_xAxis.setCurrentIndex(all_scales.indexOf(item_scales[0]));
 		m_yAxis.clear();
-		m_yAxis.addItems(vipScaleNames(m_scales));
-		m_yAxis.setCurrentIndex(m_scales.indexOf(item_scales[1]));
+		m_yAxis.addItems(vipScaleNames(all_scales));
+		m_yAxis.setCurrentIndex(all_scales.indexOf(item_scales[1]));
 	}
 	m_xAxis.setVisible(have_axis_option);
 	m_yAxis.setVisible(have_axis_option);
@@ -467,12 +471,14 @@ void VipPlotItemWidget::updatePlotItem(VipPlotItem* item)
 
 	QList<VipAbstractScale*> item_scales = item->axes();
 	if (item_scales.size() == 2) {
+		// Tested, not just bounded: a scale destroyed since the item was set leaves a
+		// null here instead of a dangling pointer handed to setAxes().
 		int index = m_xAxis.currentIndex();
-		if (index >= 0 && index < m_scales.size())
+		if (index >= 0 && index < m_scales.size() && m_scales[index])
 			item_scales[0] = m_scales[index];
 
 		index = m_yAxis.currentIndex();
-		if (index >= 0 && index < m_scales.size())
+		if (index >= 0 && index < m_scales.size() && m_scales[index])
 			item_scales[1] = m_scales[index];
 
 		item->setAxes(item_scales, item->coordinateSystemType());
