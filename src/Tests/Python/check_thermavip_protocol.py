@@ -108,6 +108,33 @@ for fun in ('read', 'write'):
     else:
         check('%s exists' % fun, False)
 
+# 7. the helper that adds a widget to a player must not rename it before the
+#    call that can fail, and it must not derive its name from a clock.
+for node in ast.walk(tree):
+    if isinstance(node, ast.FunctionDef) and node.name == 'add_widget_to_player':
+        body = ast.unparse(node)
+        check('add_widget_to_player restores the name it changed', 'setObjectName(oname)' in body)
+        check('add_widget_to_player does not name the widget after a clock', 'time.time()' not in body)
+        break
+else:
+    check('add_widget_to_player exists', False)
+
+# 8. the two base processing classes are instantiated by the C++ side, which
+#    calls these on an instance: declared without self they raise TypeError, and
+#    the caller shows a processing with no editable parameter instead of an error.
+BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'Python', 'ThermavipPyProcessing.py')
+base_tree = ast.parse(open(BASE, encoding='utf-8').read())
+seen = 0
+for node in ast.walk(base_tree):
+    if isinstance(node, ast.ClassDef):
+        for member in node.body:
+            if isinstance(member, ast.FunctionDef) and member.name in ('parameters', 'setParameters'):
+                seen += 1
+                names = [a.arg for a in member.args.args]
+                check('%s.%s takes self' % (node.name, member.name), names[:1] == ['self'],
+                      'takes %r' % (names,))
+check('the two base classes declare both methods', seen == 4, 'found %d' % seen)
+
 if failures:
     for f in failures:
         print('FAIL:', f)
