@@ -94,9 +94,14 @@ VipLegend* VipLegendItem::legend() const
 
 bool VipLegendItem::emptyLegendText() const
 {
+	// The index, not just the size: legendNames() is a dynamic property of the
+	// plotted item, and paint() thirty lines below already checks it this way.
 	VipText text;
-	if (d_data->item && d_data->item->legendNames().size())
-		text = d_data->item->legendNames()[d_data->legendIndex];
+	if (d_data->item) {
+		const QList<VipText> names = d_data->item->legendNames();
+		if (d_data->legendIndex >= 0 && d_data->legendIndex < names.size())
+			text = names[d_data->legendIndex];
+	}
 
 	return text.isEmpty();
 }
@@ -157,8 +162,9 @@ void VipLegendItem::updateLegendItem()
 
 	if (d_data->item && this->isVisible()) {
 		VipText text;
-		if (d_data->item->legendNames().size())
-			text = d_data->item->legendNames()[d_data->legendIndex];
+		const QList<VipText> names = d_data->item->legendNames();
+		if (d_data->legendIndex >= 0 && d_data->legendIndex < names.size())
+			text = names[d_data->legendIndex];
 
 		VipTextStyle st = d_data->textStyle;
 
@@ -690,6 +696,8 @@ void VipLegend::addLegendItem(VipLegendItem* legendItem)
 void VipLegend::insertLegendItem(int index, VipLegendItem* legendItem)
 {
 	if (legendItem && layout()->items().indexOf(legendItem) < 0) {
+		if (index < 0 || index > d_data->items.size())
+			index = d_data->items.size();
 		if (d_data->items.indexOf(legendItem->plotItem()) < 0)
 			d_data->items.insert(index, legendItem->plotItem());
 
@@ -1106,7 +1114,11 @@ void VipLegend::itemChanged(VipPlotItem* item)
 {
 	// legend count change for this item, update the legend items
 	if (item->legendNames().size() != this->count(item)) {
+		// removeItem() answers -1 when it removed nothing, and that went straight into
+		// two indexed insertions.
 		int index = removeItem(item);
+		if (index < 0)
+			index = this->count();
 		this->insertItem(index, item);
 	}
 
