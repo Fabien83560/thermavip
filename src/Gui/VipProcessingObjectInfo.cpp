@@ -616,7 +616,7 @@ public:
 	{
 	}
 
-	virtual QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const
+	QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override
 	{
 		QSize size = QItemDelegate::sizeHint(option, index);
 		if (!(pen.color().alpha() == 0 || pen.style() == Qt::NoPen)) {
@@ -626,7 +626,7 @@ public:
 		return size;
 	}
 
-	virtual void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const
+	void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
 	{
 		QItemDelegate::paint(painter, option, index);
 
@@ -672,7 +672,10 @@ public:
 		setItemDelegate(delegate = new BorderItemDelegate(this));
 	}
 
-	QSize sizeHint() const
+	// override, and it did not even say virtual: nothing told a reader this is a
+	// point of substitution, and the day a base signature changes the redefinition
+	// silently stops being one.
+	QSize sizeHint() const override
 	{
 		// optimized version of sizeHint()
 
@@ -731,9 +734,20 @@ public:
 		return nullptr;
 	}
 
-	virtual void mouseMoveEvent(QMouseEvent* evt)
+	void mousePressEvent(QMouseEvent* evt) override
 	{
-		if (evt->buttons() & Qt::LeftButton) {
+		d_press_pos = evt->VIP_EVT_POSITION();
+		QTreeWidget::mousePressEvent(evt);
+	}
+
+	void mouseMoveEvent(QMouseEvent* evt) override
+	{
+		// The base used never to see this event, so selecting by dragging, the
+		// automatic scroll at the edge and the hover were all dead; and a drag
+		// started on the first pixel of movement, anywhere, even with nothing
+		// selected.
+		if ((evt->buttons() & Qt::LeftButton) && !selectedItems().isEmpty() && itemAt(d_press_pos) &&
+		    (evt->VIP_EVT_POSITION() - d_press_pos).manhattanLength() >= QApplication::startDragDistance()) {
 			QDrag drag(this);
 
 			// create the mime data
@@ -742,10 +756,13 @@ public:
 
 			drag.setMimeData(mime);
 			drag.exec();
+			return;
 		}
+
+		QTreeWidget::mouseMoveEvent(evt);
 	}
 
-	virtual void dragMoveEvent(QDragMoveEvent* evt)
+	void dragMoveEvent(QDragMoveEvent* evt) override
 	{
 		const QMimeData* mime = evt->mimeData();
 		if (qobject_cast<const VipMimeDataCoordinateSystem*>(mime)) {
@@ -753,7 +770,7 @@ public:
 		}
 	}
 
-	virtual void dragEnterEvent(QDragEnterEvent* evt)
+	void dragEnterEvent(QDragEnterEvent* evt) override
 	{
 		const QMimeData* mime = evt->mimeData();
 		if (qobject_cast<const VipMimeDataCoordinateSystem*>(mime)) {
@@ -761,7 +778,10 @@ public:
 		}
 	}
 
-	virtual void dropEvent(QDropEvent* evt) { evt->setAccepted(false); }
+	void dropEvent(QDropEvent* evt) override { evt->setAccepted(false); }
+
+private:
+	QPoint d_press_pos;
 };
 
 class VipProcessingObjectInfo::PrivateData
