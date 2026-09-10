@@ -52,6 +52,14 @@ typedef union MemHeader
 	char reserved[64];
 } MemHeader;
 
+// True when the string can name a Python object, which is what the generated
+// code below expects: anything else used to be spliced into that code.
+static bool vipIsPythonIdentifier(const QString& name)
+{
+	static const QRegularExpression identifier(QStringLiteral("\\A[A-Za-z_][A-Za-z0-9_]{0,63}\\z"));
+	return identifier.match(name).hasMatch();
+}
+
 // Integer to (little endian) QByteArray
 static QByteArray toBinary(int value)
 {
@@ -287,10 +295,28 @@ public:
 	{
 		if (error)
 			error->clear();
+		// The name used to be pasted into the source three times, and the third
+		// one sat in expression position: a caller passing an expression instead
+		// of a name had it evaluated here, in this process. It is checked against
+		// what an identifier may be and then sent as an object; the value is
+		// looked up in the globals rather than spliced into the code.
+		if (!vipIsPythonIdentifier(name)) {
+			if (error)
+				*error = "invalid object name";
+			VIP_LOG_ERROR("Refused an object name that is not an identifier");
+			return false;
+		}
+
+		if (!d_loc.sendObject("__name", QVariant::fromValue(name)).value().value<VipPyError>().isNull()) {
+			if (error)
+				*error = "cannot send the object name";
+			return false;
+		}
+
 		QString code = "import pickle\n"
 			       "import struct\n"
-			       "__res = b'" SH_OBJECT "' +struct.pack('i',len('" +
-			       name + "')) + b'" + name + "' + pickle.dumps(" + name + ")";
+			       "__nb = __name.encode()\n"
+			       "__res = b'" SH_OBJECT "' + struct.pack('i',len(__nb)) + __nb + pickle.dumps(globals()[__name])";
 
 		VipPyError err = d_loc.execCode(code).value().value<VipPyError>();
 		if (!err.isNull()) {
@@ -326,10 +352,28 @@ public:
 			return false;
 		}
 
+		// The name used to be pasted into the source three times, and the third
+		// one sat in expression position: a caller passing an expression instead
+		// of a name had it evaluated here, in this process. It is checked against
+		// what an identifier may be and then sent as an object; the value is
+		// looked up in the globals rather than spliced into the code.
+		if (!vipIsPythonIdentifier(name)) {
+			if (error)
+				*error = "invalid object name";
+			VIP_LOG_ERROR("Refused an object name that is not an identifier");
+			return false;
+		}
+
+		if (!d_loc.sendObject("__name", QVariant::fromValue(name)).value().value<VipPyError>().isNull()) {
+			if (error)
+				*error = "cannot send the object name";
+			return false;
+		}
+
 		QString code = "import pickle\n"
 			       "import struct\n"
-			       "__res = b'" SH_OBJECT "' +struct.pack('i',len('" +
-			       name + "')) + b'" + name + "' + pickle.dumps(" + name + ")";
+			       "__nb = __name.encode()\n"
+			       "__res = b'" SH_OBJECT "' + struct.pack('i',len(__nb)) + __nb + pickle.dumps(globals()[__name])";
 
 		err = d_loc.execCode(code).value().value<VipPyError>();
 		if (!err.isNull()) {
@@ -717,10 +761,15 @@ qint64 VipIPythonShellProcess::start(int font_size, const QString& _style, const
 		QStringList lst;
 		lst << pdir + "/Library/bin" << pdir + "/bin" << pdir + "/condabin" << pdir + "/Scripts";
 
+		// Added to the PATH, not put in its place. The assignment threw away the
+		// one the process was given, so the child lost System32: the libraries the
+		// interpreter loads and every command the console runs afterwards were
+		// resolved against four directories. The separator prepared just below
+		// only makes sense in front of a concatenation.
 		QString path = env.value("PATH");
-		if (!path.endsWith(";"))
+		if (!path.isEmpty() && !path.endsWith(";"))
 			path += ";";
-		path = lst.join(";");
+		path += lst.join(";");
 		env.insert("PATH", path);
 		vip_debug("path: %s\n", path.toLatin1().data());
 	}

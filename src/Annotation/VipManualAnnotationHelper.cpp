@@ -168,9 +168,22 @@ Vip_event_list ManualAnnotationHelper::createFromUserProposal(const QList<QPolyg
 	// TEST
 	// sendToJSON("C:/Users/VM213788/Desktop/tmp_json.json", userName, camera, pulse, lst);
 	// vip_debug("filename: '%s'\n'", filename.toLatin1().data());
+	// The protocol is '<type> <json> [<file>]' terminated by a newline, so its
+	// fields are separated by spaces and cannot carry one. A path holding a space
+	// used to be cut in two and the script received a truncated name, which read
+	// as an unexplained failure; a path holding a newline injected a second
+	// command into the stream. The reading end lives in a script that is not part
+	// of this repository, so the fields cannot be encoded: what can be done here
+	// is to refuse a command that would not arrive as it was meant, and say why.
+	const QString offending = json.contains('\n') || json.contains(' ') ? json : (filename.contains('\n') || filename.contains(' ') ? filename : QString());
+	if (!offending.isEmpty()) {
+		VIP_LOG_ERROR("Cannot ask for annotations: this path cannot be sent to the helper because it contains a space or a line break: " + offending);
+		return Vip_event_list();
+	}
+
 	QString cmd = (type + " " + json + (filename.isEmpty() ? QString() : (" " + filename)) + "\n");
 	vip_debug("cmd: %s\n", cmd.toLatin1().data());
-	m_process.write((type + " " + json + (filename.isEmpty() ? QString() : (" " + filename)) + "\n").toLatin1()); // use 'segm' for segmentation
+	m_process.write(cmd.toLatin1()); // use 'segm' for segmentation
 
 	VipProgress p;
 	p.setRange(0, 100);
