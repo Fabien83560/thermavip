@@ -2560,6 +2560,13 @@ void VipProcessingObject::dirtyProcessingIO(VipProcessingIO* io)
 	d_data->dirtyIO = true;
 	Q_EMIT IOChanged(io);
 
+	// Only an input or a property can change the set of sources; an output cannot.
+	// The argument names the I/O that changed and was used for the signal alone, so
+	// a full descent of the upstream graph ran for every output added too, and
+	// resizing a multi-output runs one per element.
+	if (io && (io->type() == VipProcessingIO::TypeOutput || io->type() == VipProcessingIO::TypeMultiOutput))
+		return;
+
 	// send the source properties to the sources
 	QList<QByteArray> names = sourceProperties();
 	for (int i = 0; i < names.size(); ++i)
