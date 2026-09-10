@@ -68,6 +68,15 @@ VIP_ALWAYS_INLINE bool isNan(double value)
 {
 	return value != value;
 }
+template<>
+VIP_ALWAYS_INLINE bool isNan(long double value)
+{
+	// The file has a branch of its own for this type, but the primary template
+	// answered no for it: no NaN was ever detected in an array of long double,
+	// so they entered the histogram as ordinary values and compared false
+	// against everything, which is not a strict weak ordering.
+	return value != value;
+}
 
 template<class T>
 struct sort_pair

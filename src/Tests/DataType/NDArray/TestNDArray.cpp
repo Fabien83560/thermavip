@@ -21,6 +21,7 @@
 #include <QDir>
 #include "VipEval.h"
 
+#include <limits>
 #include <vector>
 
 class TestNDArray : public QObject
@@ -228,6 +229,23 @@ private Q_SLOTS:
 		VipNDArray ulongs(qMetaTypeId<unsigned long>(), vipVector(4));
 		QVERIFY2(!ulongs.isNull(), "an array of unsigned long must exist");
 		QCOMPARE(ulongs.size(), (qsizetype)4);
+	}
+
+	/// The eleven converters from long double to an integer cast without a bound.
+	/// A cast of a value outside the range of the destination is undefined, and
+	/// these are reached from any QVariant conversion, so a number read from a
+	/// file decided what happened.
+	void aLongDoubleOutOfRangeIsClampedNotUndefined()
+	{
+		QVariant big = QVariant::fromValue((vip_long_double)1e30L);
+		QVERIFY(big.canConvert<qint32>());
+		QCOMPARE(big.value<qint32>(), std::numeric_limits<qint32>::max());
+
+		QVariant lower = QVariant::fromValue((vip_long_double)-1e30L);
+		QCOMPARE(lower.value<qint32>(), std::numeric_limits<qint32>::lowest());
+
+		QVariant ordinary = QVariant::fromValue((vip_long_double)42.5L);
+		QCOMPARE(ordinary.value<qint32>(), 42);
 	}
 
 	/// The axis of a stack comes from the caller and is used as an index into a

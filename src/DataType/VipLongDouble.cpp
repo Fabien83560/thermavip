@@ -29,6 +29,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <limits>
+#include <type_traits>
+
 #include "VipLongDouble.h"
 
 #include <complex>
@@ -197,6 +200,19 @@ static vip_long_double toLongDouble(T v)
 template<class T>
 static T fromLongDouble(vip_long_double v)
 {
+	// Clamped for the integer targets. A cast of a value outside the range of
+	// the destination is undefined, and these eleven converters are reached from
+	// any QVariant conversion, so a number read from a file decided what happened.
+	if constexpr (std::is_integral<T>::value) {
+		if (v != v)
+			return T(0);
+		constexpr vip_long_double lowest = static_cast<vip_long_double>(std::numeric_limits<T>::lowest());
+		constexpr vip_long_double highest = static_cast<vip_long_double>(std::numeric_limits<T>::max());
+		if (v <= lowest)
+			return std::numeric_limits<T>::lowest();
+		if (v >= highest)
+			return std::numeric_limits<T>::max();
+	}
 	return (T)v;
 }
 
