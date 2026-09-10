@@ -495,6 +495,13 @@ void VipPyFitLinear::applyFit()
 	}
 
 	VipAnyData out = create(QVariant::fromValue(out_curve));
+	// The units of the data, as the exponential fit already does: create() only
+	// carries the attributes of the processing, so the derived curve came out with
+	// no physical unit at all.
+	out.setXUnit(any.xUnit());
+	out.setYUnit(any.yUnit());
+	out.setZUnit(any.zUnit());
+
 	if (!equation.isEmpty())
 		out.setAttribute("equation", equation);
 	outputAt(0)->setData(out);
@@ -583,6 +590,13 @@ void VipPyFitGaussian::applyFit()
 	}
 
 	VipAnyData out = create(QVariant::fromValue(out_curve));
+	// The units of the data, as the exponential fit already does: create() only
+	// carries the attributes of the processing, so the derived curve came out with
+	// no physical unit at all.
+	out.setXUnit(any.xUnit());
+	out.setYUnit(any.yUnit());
+	out.setZUnit(any.zUnit());
+
 	if (!equation.isEmpty())
 		out.setAttribute("equation", equation);
 	outputAt(0)->setData(out);
@@ -621,6 +635,13 @@ void VipPyFitPolynomial::applyFit()
 	}
 
 	VipAnyData out = create(QVariant::fromValue(out_curve));
+	// The units of the data, as the exponential fit already does: create() only
+	// carries the attributes of the processing, so the derived curve came out with
+	// no physical unit at all.
+	out.setXUnit(any.xUnit());
+	out.setYUnit(any.yUnit());
+	out.setZUnit(any.zUnit());
+
 	if (!equation.isEmpty())
 		out.setAttribute("equation", equation);
 	outputAt(0)->setData(out);
