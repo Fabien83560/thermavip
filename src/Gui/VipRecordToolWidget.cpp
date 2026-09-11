@@ -573,6 +573,7 @@ public:
 
 	// Re-entrance guard for launchRecord().
 	bool inLaunchRecord{ false };
+	bool renderStarted{ false };
 	VipGenericRecorder* recorder;
 	QList<VipIODevice*> sourceDevices;
 	VipProcessingObjectList independantResourceProcessings;
@@ -1261,6 +1262,35 @@ void VipRecordToolWidget::timeout()
 // }
 // }
 
+void VipRecordToolWidget::stopRecord()
+{
+	// Captured before the call below, which clears it as a side effect, and tested:
+	// the end of render was given the pointer that had just been set to null.
+	QPointer<VipBaseDragWidget> rendered = d_data->sourceWidget;
+
+	// stop the timer
+	d_data->timer.stop();
+	vipProcessEvents();
+
+	// d_data->recordWidget.stopRecording();
+	d_data->recorder->close();
+	updateFileFiltersAndDevice();
+	d_data->recorder->setEnabled(false);
+
+	// end saving: cleanup. Closing the recorder posts another stop, so the end is
+	// paired with a start that actually happened rather than with the record type.
+	if (d_data->renderStarted && rendered) {
+		d_data->renderStarted = false;
+		VipRenderObject::endRender(rendered, d_data->state);
+	}
+
+	// TOCHECK:
+	// We comment this as it disable the possibility to reuse the saver parameters
+	// d_data->recorder->setRecorder(nullptr);
+
+	// d_data->sourceWidget = nullptr;
+}
+
 void VipRecordToolWidget::launchRecord(bool launch)
 {
 	// This slot is connected, queued, to the open mode of the recorder, and its own
@@ -1274,33 +1304,14 @@ void VipRecordToolWidget::launchRecord(bool launch)
 	const auto leave = qScopeGuard([this] { d_data->inLaunchRecord = false; });
 
 	if (!launch) {
-		// Captured before the call below, which clears it as a side effect, and tested:
-		// the end of render was given the pointer that had just been set to null.
-		QPointer<VipBaseDragWidget> rendered = d_data->sourceWidget;
-
-		// stop the timer
-		d_data->timer.stop();
-		vipProcessEvents();
-
-		// d_data->recordWidget.stopRecording();
-		d_data->recorder->close();
-		updateFileFiltersAndDevice();
-		d_data->recorder->setEnabled(false);
-
-		// end saving: cleanup
-		if (this->recordType() == Movie && rendered)
-			VipRenderObject::endRender(rendered, d_data->state);
-
-		// TOCHECK:
-		// We comment this as it disable the possibility to reuse the saver parameters
-		// d_data->recorder->setRecorder(nullptr);
-
-		// d_data->sourceWidget = nullptr;
+		stopRecord();
 		return;
 	}
 
-	if (d_data->recordWidget->path().isEmpty())
-		return launchRecord(false);
+	if (d_data->recordWidget->path().isEmpty()) {
+		stopRecord();
+		return;
+	}
 
 	// actually build the connections
 	updateFileFiltersAndDevice(true, false);
@@ -1309,24 +1320,31 @@ void VipRecordToolWidget::launchRecord(bool launch)
 	for (int i = 0; i < d_data->sourceDisplayObjects.size(); ++i) {
 		if (!d_data->sourceDisplayObjects[i]) {
 			VIP_LOG_ERROR("Unable to record: one or more selected items have been closed");
-			return launchRecord(false);
+			stopRecord();
+			return;
 		}
 	}
 
-	if (!d_data->sourceDevices.size())
-		return launchRecord(false);
+	if (!d_data->sourceDevices.size()) {
+		stopRecord();
+		return;
+	}
 
 	VipProcessingPool* pool = d_data->sourceDevices.first()->parentObjectPool();
-	if (!pool)
-		return launchRecord(false);
+	if (!pool) {
+		stopRecord();
+		return;
+	}
 
 	if (recordType() == Movie) {
 		if (!d_data->sourceWidget) {
 			VIP_LOG_ERROR("No valid selected player for video saving");
-			return launchRecord(false);
+			stopRecord();
+			return;
 		}
 		// for a movie, prepare the source widget for rendering
 		VipRenderObject::startRender(d_data->sourceWidget, d_data->state);
+		d_data->renderStarted = true;
 		vipProcessEvents();
 	}
 
