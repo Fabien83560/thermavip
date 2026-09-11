@@ -245,8 +245,15 @@ const DB& readDB()
 
 
 
+static QSqlDatabase _supplied_db;
+static bool _use_supplied_db = false;
+
 QSqlDatabase& globalDB()
 {
+	// Checked before the static below: an application that supplies its own
+	// connection never opens the configured one.
+	if (_use_supplied_db)
+		return _supplied_db;
 	static QSqlDatabase inst = QSqlDatabase::addDatabase("QMYSQL", "mysql_database");
 	if (inst.connectionName() != "mysql_database")
 		inst = QSqlDatabase::database("QMYSQL", "mysql_database");
@@ -256,6 +263,12 @@ QSqlDatabase& globalDB()
 QSqlDatabase vipGetGlobalSQLConnection()
 {
 	return globalDB();
+}
+
+void vipSetGlobalSQLConnection(const QSqlDatabase& db)
+{
+	_supplied_db = db;
+	_use_supplied_db = db.isValid();
 }
 
 static bool reconnectDB(bool close = false)
@@ -1095,17 +1108,24 @@ VipEventQueryResults vipQueryDB(const VipEventQuery& query, VipProgress* p)
 	else {
 		//...or find with other conditions
 
-		// camera condition
+		// camera condition. Bound like the criteria below: these four lists reach
+		// here from a session file or a script as well as from the combo boxes, so
+		// they are free text too, and an apostrophe in a name was enough to break
+		// the query.
 		if (!query.cameras.isEmpty()) {
 			QStringList lst;
-			for (qsizetype i = 0; i < query.cameras.size(); ++i)
-				lst << ("line_of_sight = '" + query.cameras[i] + "'");
+			for (qsizetype i = 0; i < query.cameras.size(); ++i) {
+				lst << "line_of_sight = ?";
+				binds << QVariant(query.cameras[i]);
+			}
 			conditions << "(" + lst.join(" OR ") + ")";
 		}
 		if (!query.devices.isEmpty()) {
 			QStringList lst;
-			for (qsizetype i = 0; i < query.devices.size(); ++i)
-				lst << ("device = '" + query.devices[i] + "'");
+			for (qsizetype i = 0; i < query.devices.size(); ++i) {
+				lst << "device = ?";
+				binds << QVariant(query.devices[i]);
+			}
 			conditions << "(" + lst.join(" OR ") + ")";
 		}
 		// method condition
@@ -1116,8 +1136,10 @@ VipEventQueryResults vipQueryDB(const VipEventQuery& query, VipProgress* p)
 		// PPO names
 		if (!query.users.isEmpty()) {
 			QStringList lst;
-			for (qsizetype i = 0; i < query.users.size(); ++i)
-				lst << ("user = '" + query.users[i] + "'");
+			for (qsizetype i = 0; i < query.users.size(); ++i) {
+				lst << "user = ?";
+				binds << QVariant(query.users[i]);
+			}
 			conditions << "(" + lst.join(" OR ") + ")";
 		}
 		// pulse condition
@@ -1178,8 +1200,10 @@ VipEventQueryResults vipQueryDB(const VipEventQuery& query, VipProgress* p)
 		// event type
 		if (query.event_types.size()) {
 			QStringList lst;
-			for (qsizetype i = 0; i < query.event_types.size(); ++i)
-				lst << ("category = '" + query.event_types[i] + "'");
+			for (qsizetype i = 0; i < query.event_types.size(); ++i) {
+				lst << "category = ?";
+				binds << QVariant(query.event_types[i]);
+			}
 			conditions << "(" + lst.join(" OR ") + ")";
 		}
 	}
