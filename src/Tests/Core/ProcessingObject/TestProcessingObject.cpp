@@ -384,6 +384,96 @@ private Q_SLOTS:
 		QVERIFY(remaining > 0);
 	}
 
+	/// The memory cap is a floor, not a ceiling: the eviction walks from the
+	/// newest datum backwards and stops on the one that reaches the cap, which it
+	/// keeps. Measured on a datum whose footprint is read rather than assumed.
+	void theMemoryCapKeepsTheDatumThatReachesIt()
+	{
+		const qint64 one = makeData(0).memoryFootprint();
+		QVERIFY(one > 0);
+
+		VipFIFOList list;
+		list.setListLimitType(VipDataList::MemorySize);
+		list.setMaxListMemory(3 * one);
+
+		for (int i = 0; i < 8; ++i)
+			list.push(makeData(i));
+		QCOMPARE(list.remaining(), 3);
+
+		// One byte below three data worth of footprint: the third is still kept,
+		// so the buffer holds more than the cap allows. That is the contract.
+		VipFIFOList tight;
+		tight.setListLimitType(VipDataList::MemorySize);
+		tight.setMaxListMemory(3 * one - 1);
+		for (int i = 0; i < 8; ++i)
+			tight.push(makeData(i));
+		QCOMPARE(tight.remaining(), 3);
+	}
+
+	/// The two cap kinds are a combination, and the tighter of the two decides.
+	void theTighterOfTheTwoCapsDecides()
+	{
+		const qint64 one = makeData(0).memoryFootprint();
+
+		VipFIFOList memoryTighter;
+		memoryTighter.setListLimitType(VipDataList::Number | VipDataList::MemorySize);
+		memoryTighter.setMaxListSize(6);
+		memoryTighter.setMaxListMemory(2 * one);
+		for (int i = 0; i < 9; ++i)
+			memoryTighter.push(makeData(i));
+		QCOMPARE(memoryTighter.remaining(), 2);
+
+		VipFIFOList numberTighter;
+		numberTighter.setListLimitType(VipDataList::Number | VipDataList::MemorySize);
+		numberTighter.setMaxListSize(2);
+		numberTighter.setMaxListMemory(100 * one);
+		for (int i = 0; i < 9; ++i)
+			numberTighter.push(makeData(i));
+		QCOMPARE(numberTighter.remaining(), 2);
+
+		// None means none, whatever the two values say.
+		VipFIFOList uncapped;
+		uncapped.setListLimitType(VipDataList::None);
+		uncapped.setMaxListSize(2);
+		uncapped.setMaxListMemory(one);
+		for (int i = 0; i < 9; ++i)
+			uncapped.push(makeData(i));
+		QCOMPARE(uncapped.remaining(), 9);
+	}
+
+	/// A buffer holding exactly its number cap keeps everything: the eviction
+	/// tests for strictly more, and the boundary is where an off-by-one shows.
+	void aBufferAtItsExactNumberCapKeepsEverything()
+	{
+		VipFIFOList list;
+		list.setListLimitType(VipDataList::Number);
+		list.setMaxListSize(3);
+
+		for (int i = 0; i < 3; ++i)
+			list.push(makeData(i));
+		QCOMPARE(list.remaining(), 3);
+
+		list.push(makeData(3));
+		QCOMPARE(list.remaining(), 3);
+
+		// And the oldest is the one that went, since this is a first in first out.
+		QCOMPARE(list.next().data().value<double>(), 1.0);
+	}
+
+	/// A cap of one keeps the newest datum and nothing else.
+	void aCapOfOneKeepsTheNewest()
+	{
+		VipFIFOList list;
+		list.setListLimitType(VipDataList::Number);
+		list.setMaxListSize(1);
+
+		for (int i = 0; i < 5; ++i)
+			list.push(makeData(i));
+
+		QCOMPARE(list.remaining(), 1);
+		QCOMPARE(list.next().data().value<double>(), 4.0);
+	}
+
 	/// clear() drops pending data.
 	void clearRemovesPendingData()
 	{
@@ -563,6 +653,137 @@ private Q_SLOTS:
 
 	/// The list writer records an element count. Kept separate from the read
 	/// below so that a failure points at one side or the other.
+	/// Each io type has its own pair of archive operators, and they were only ever
+	/// exercised through a whole processing. Read back one type at a time: the name,
+	/// the enabled flag and the connection address are what the pair carries.
+	void theInputOperatorRoundTrips()
+	{
+		VipInput source;
+		source.setName("an input");
+		source.setEnabled(false);
+
+		VipXOStringArchive out;
+		QVERIFY(out.content("io", source));
+
+		VipInput target;
+		VipXIStringArchive in(out.toString());
+		QVERIFY(in.isOpen());
+		in.content("io", target);
+
+		QVERIFY2(!in.hasError(), qPrintable(in.errorString()));
+		QCOMPARE(target.name(), QStringLiteral("an input"));
+		QCOMPARE(target.isEnabled(), false);
+	}
+
+	void theOutputOperatorRoundTrips()
+	{
+		VipOutput source;
+		source.setName("an output");
+		source.setEnabled(true);
+
+		VipXOStringArchive out;
+		QVERIFY(out.content("io", source));
+
+		VipOutput target;
+		target.setEnabled(false);
+		VipXIStringArchive in(out.toString());
+		QVERIFY(in.isOpen());
+		in.content("io", target);
+
+		QVERIFY2(!in.hasError(), qPrintable(in.errorString()));
+		QCOMPARE(target.name(), QStringLiteral("an output"));
+		QCOMPARE(target.isEnabled(), true);
+	}
+
+	/// A property carries a value on top of what the other io types write.
+	void thePropertyOperatorCarriesItsValue()
+	{
+		VipProperty source;
+		source.setName("a property");
+		source.setData(VipAnyData(QVariant(42.5), VipInvalidTime));
+
+		VipXOStringArchive out;
+		QVERIFY(out.content("io", source));
+
+		VipProperty target;
+		VipXIStringArchive in(out.toString());
+		QVERIFY(in.isOpen());
+		in.content("io", target);
+
+		QVERIFY2(!in.hasError(), qPrintable(in.errorString()));
+		QCOMPARE(target.name(), QStringLiteral("a property"));
+		QCOMPARE(target.data().data().value<double>(), 42.5);
+	}
+
+	/// The multi io types write a count and then their elements. The count is the
+	/// field a session file could lie about, and it is read back here on the
+	/// nominal path so the refusal of a bad one stays distinguishable.
+	void theMultiInputOperatorRoundTripsItsElements()
+	{
+		MultiInputProcessing proc;
+		VipMultiInput* inputs = proc.topLevelInputAt(0)->toMultiInput();
+		QVERIFY(inputs);
+		QVERIFY(inputs->resize(3));
+		inputs->at(1)->setName("the middle one");
+
+		VipXOStringArchive out;
+		QVERIFY(out.content("io", *inputs));
+
+		MultiInputProcessing rebuilt;
+		VipMultiInput* target = rebuilt.topLevelInputAt(0)->toMultiInput();
+		QVERIFY(target);
+		VipXIStringArchive in(out.toString());
+		QVERIFY(in.isOpen());
+		in.content("io", *target);
+
+		QVERIFY2(!in.hasError(), qPrintable(in.errorString()));
+		QCOMPARE(target->count(), 3);
+		QCOMPARE(target->at(1)->name(), QStringLiteral("the middle one"));
+	}
+
+	void theMultiOutputOperatorRoundTripsItsElements()
+	{
+		MultiOutputProcessing proc;
+		VipMultiOutput* outputs = proc.topLevelOutputAt(0)->toMultiOutput();
+		QVERIFY(outputs);
+		QVERIFY(outputs->resize(2));
+		outputs->at(0)->setName("the first one");
+
+		VipXOStringArchive out;
+		QVERIFY(out.content("io", *outputs));
+
+		MultiOutputProcessing rebuilt;
+		VipMultiOutput* target = rebuilt.topLevelOutputAt(0)->toMultiOutput();
+		QVERIFY(target);
+		VipXIStringArchive in(out.toString());
+		QVERIFY(in.isOpen());
+		in.content("io", *target);
+
+		QVERIFY2(!in.hasError(), qPrintable(in.errorString()));
+		QCOMPARE(target->count(), 2);
+		QCOMPARE(target->at(0)->name(), QStringLiteral("the first one"));
+	}
+
+	/// The error is a flag next to a string, and both are read by callers that
+	/// never touched the object that set them. resetError() has to clear the two.
+	void resetErrorClearsTheFlagAndTheMessage()
+	{
+		AddOne proc;
+		QVERIFY(!proc.hasError());
+
+		proc.setError("something went wrong", VipProcessingObject::WrongInput);
+		QVERIFY(proc.hasError());
+		QCOMPARE(proc.errorString(), QStringLiteral("something went wrong"));
+		QCOMPARE(proc.errorCode(), (int)VipProcessingObject::WrongInput);
+
+		proc.resetError();
+		QVERIFY2(!proc.hasError(), "the flag must go down, or every later read reports a stale error");
+		QVERIFY(proc.errorString().isEmpty());
+		// And the code stays -1, which is RuntimeError: reading the code of an object
+		// that never failed answers an error identifier, so callers must read the flag.
+		QCOMPARE(proc.errorCode(), -1);
+	}
+
 	void sessionListWritesItsCount()
 	{
 		VipProcessingList source;
