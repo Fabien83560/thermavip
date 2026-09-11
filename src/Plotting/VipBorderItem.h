@@ -88,6 +88,10 @@ public:
 	Vip::ValueType axisIntersectionType() const;
 	void disableAxisIntersection();
 	double axisIntersectionValue() const;
+
+	/// @brief Coordinate, along this item's own axis, that the layout gives it when
+	/// it is pinned to another scale. Only meaningful while axisIntersection() is set.
+	double axisIntersectionCoordinate() const;
 	bool axisIntersectionEnabled() const;
 
 	virtual void setAlignment(Alignment align);
