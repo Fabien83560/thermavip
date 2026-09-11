@@ -233,7 +233,9 @@ public:
 	VIP_ALWAYS_INLINE VipErrorData errorData() const { return *std::atomic_load(&d_data); }
 	/// @brief Returns the last error string
 	VIP_ALWAYS_INLINE QString errorString() const { return errorData().errorString(); }
-	/// @brief Returns the last error code, ot 0 if no error occured.
+	/// @brief Returns the last error code.
+	/// With no error it answers -1, which is also RuntimeError: the code alone does
+	/// not tell an object that failed from one that never ran. hasError() does.
 	VIP_ALWAYS_INLINE int errorCode() const { return errorData().errorCode(); }
 	/// @brief Returns true if an error occurred during the last operation.
 	VIP_ALWAYS_INLINE bool hasError() const { return d_has_error.load(std::memory_order_relaxed); }
