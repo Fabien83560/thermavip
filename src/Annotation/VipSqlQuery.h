@@ -82,6 +82,9 @@ VIP_ANNOTATION_EXPORT QSqlDatabase vipGetGlobalSQLConnection();
 /// only. Opening blocks the caller, so it does not belong to the thread that
 /// paints.
 VIP_ANNOTATION_EXPORT bool vipCreateSQLConnection(const QString& hostname, int port, const QString& db_name, const QString& user_name, const QString& password);
+/// @brief Use this already opened connection for every query of this module.
+/// An invalid database restores the configured one.
+VIP_ANNOTATION_EXPORT void vipSetGlobalSQLConnection(const QSqlDatabase& db);
 
 VIP_ANNOTATION_EXPORT void vipSetThermalEventDBOptions(const VipThermalEventDBOptions&);
 VIP_ANNOTATION_EXPORT const VipThermalEventDBOptions& vipGetThermalEventDBOptions() noexcept;
