@@ -108,6 +108,22 @@ protected:
 	void apply() override { outputAt(0)->setData(create(QVariant(inputAt(0)->data().value<double>() + 1.0))); }
 };
 
+/// Throws from apply(). The task pool thread has to survive it.
+class ThrowingProcessing : public VipProcessingObject
+{
+	Q_OBJECT
+	VIP_IO(VipInput input)
+
+public:
+	ThrowingProcessing(QObject* parent = nullptr)
+	  : VipProcessingObject(parent)
+	{
+	}
+
+protected:
+	void apply() override { throw std::runtime_error("boom"); }
+};
+
 /// Takes a long time and no processor while doing so.
 class SlowProcessing : public VipProcessingObject
 {
@@ -576,6 +592,104 @@ private Q_SLOTS:
 		// leaves the timeout at -1, that is an unbounded wait.
 		QVERIFY2(proc.wait(true, 30000), "wait() must return once the queue is drained");
 		QCOMPARE(proc.applyCount.load(), count);
+	}
+
+	// -- Error paths ---------------------------------------------------------
+
+	/// The selector is a property, so it comes from a session file or from an
+	/// editor: out of range it must be refused, not used as an index.
+	void aSelectorOutsideTheInputsIsRefused()
+	{
+		VipSwitch proc;
+		VipMultiInput* inputs = proc.topLevelInputAt(0)->toMultiInput();
+		QVERIFY(inputs);
+		QVERIFY(inputs->resize(2));
+
+		for (int selector : { -1, 2, 7 }) {
+			proc.resetError();
+			proc.propertyAt(0)->setData(selector);
+			proc.inputAt(0)->setData(makeData(1.0));
+			proc.update();
+
+			QVERIFY2(proc.hasError(), qPrintable(QStringLiteral("selector %1 must be refused").arg(selector)));
+			QCOMPARE(proc.errorCode(), (int)VipProcessingObject::WrongInputNumber);
+		}
+	}
+
+	/// And in range it sends the input it names, and only that one.
+	void theSelectorSendsTheInputItNames()
+	{
+		VipSwitch proc;
+		VipMultiInput* inputs = proc.topLevelInputAt(0)->toMultiInput();
+		QVERIFY(inputs);
+		QVERIFY(inputs->resize(2));
+
+		proc.propertyAt(0)->setData(1);
+		proc.inputAt(0)->setData(makeData(10.0));
+		proc.inputAt(1)->setData(makeData(20.0));
+		proc.update();
+
+		QVERIFY2(!proc.hasError(), qPrintable(proc.errorString()));
+		QCOMPARE(proc.outputAt(0)->data().data().value<double>(), 20.0);
+	}
+
+	/// An attribute that is not on the datum is an error, not an empty output:
+	/// a downstream processing reading an empty value would take it for a reading.
+	void anAbsentAttributeIsAnError()
+	{
+		VipExtractAttribute proc;
+		proc.propertyAt(0)->setData(QString("temperature"));
+
+		proc.inputAt(0)->setData(makeData(1.0));
+		proc.update();
+
+		QVERIFY(proc.hasError());
+		QVERIFY2(proc.errorString().contains(QStringLiteral("attribute")), qPrintable(proc.errorString()));
+	}
+
+	/// Asked for a number, a value that is not one is refused rather than sent as
+	/// zero. The conversion itself is covered elsewhere; this is the error path.
+	void anAttributeThatIsNotANumberIsRefusedWhenANumberIsAsked()
+	{
+		VipAnyData any(QVariant(1.0), 0);
+		any.setAttribute("label", QString("not a number"));
+
+		VipExtractAttribute proc;
+		proc.propertyAt(0)->setData(QString("label"));
+		proc.propertyAt(1)->setData(true);
+		proc.inputAt(0)->setData(any);
+		proc.update();
+
+		QVERIFY(proc.hasError());
+		QVERIFY2(proc.errorString().contains(QStringLiteral("double")), qPrintable(proc.errorString()));
+
+		// The same attribute without the conversion goes through, and keeps the
+		// time of the datum it came from.
+		VipExtractAttribute plain;
+		plain.propertyAt(0)->setData(QString("label"));
+		plain.inputAt(0)->setData(any);
+		plain.update();
+
+		QVERIFY2(!plain.hasError(), qPrintable(plain.errorString()));
+		QCOMPARE(plain.outputAt(0)->data().data().toString(), QStringLiteral("not a number"));
+		QCOMPARE(plain.outputAt(0)->data().time(), (qint64)0);
+	}
+
+	/// An exception thrown by apply() reaches a thread of the task pool, where
+	/// nothing above it can catch it: it has to become an error on the object
+	/// rather than end the process.
+	void anExceptionInApplyBecomesAnError()
+	{
+		ThrowingProcessing proc;
+		proc.setComputeTimeStatistics(false);
+		proc.setScheduleStrategy(VipProcessingObject::Asynchronous, true);
+
+		proc.inputAt(0)->setData(makeData(1.0));
+
+		QVERIFY2(proc.wait(true, 30000), "wait() must return even when apply() threw");
+		QVERIFY(proc.hasError());
+		QVERIFY2(proc.errorString().contains(QStringLiteral("Unhandled exception")), qPrintable(proc.errorString()));
+		QVERIFY2(proc.errorString().contains(QStringLiteral("boom")), qPrintable(proc.errorString()));
 	}
 
 	// -- Session format round trip ------------------------------------------
